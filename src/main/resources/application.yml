@@ -9,7 +9,7 @@ spring:
     locations: classpath:db/migration
 
 server:
-  port: ${TAAS_PORT:8085}
+  port: ${TAAS_PORT:8087}
 
 management:
   endpoints:

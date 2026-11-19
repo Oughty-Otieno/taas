@@ -79,7 +79,7 @@ Needs Java 17+ and Postgres (local dev uses Postgres.app).
 psql -h localhost -d postgres -c "CREATE ROLE taas_user LOGIN PASSWORD 'taas_pass'" \
   -c "CREATE DATABASE taas OWNER taas_user" -c "CREATE DATABASE taas_test OWNER taas_user"
 mvn test                      # 19 tests, against taas_test
-mvn spring-boot:run           # http://localhost:8085, API key: dev-key
+mvn spring-boot:run           # http://localhost:8087, API key: dev-key
 ```
 
 Override with `TAAS_DB_URL`, `TAAS_DB_USER`, `TAAS_DB_PASSWORD`, `TAAS_API_KEYS`, `TAAS_PORT`.
@@ -111,7 +111,7 @@ Rule violations (overdraft, supply cap, expired reservation) are **422**.
 ### Try the brief's example
 
 ```bash
-K='X-API-Key: dev-key'; J='Content-Type: application/json'; B=localhost:8085/api
+K='X-API-Key: dev-key'; J='Content-Type: application/json'; B=localhost:8087/api
 curl -sH "$K" -H "$J" $B/tokens -d '{"txId":"c1","code":"PTS","name":"Points","kind":"LOYALTY","kesPerToken":1000}'
 curl -sH "$K" -H "$J" $B/tokens/PTS/issue -d '{"txId":"t1","to":"john","amount":100}'
 curl -sH "$K" -H "$J" $B/tokens/PTS/transfer -d '{"txId":"t2","from":"john","to":"alice","amount":20}'
