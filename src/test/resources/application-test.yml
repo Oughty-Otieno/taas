@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/taas_test
+taas:
+  api-keys: test-key
+  # Effectively off: tests run the expiry job by hand with a controlled clock.
+  reservation-expiry-interval-ms: 3600000

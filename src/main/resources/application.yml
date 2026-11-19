@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: taas
+  datasource:
+    url: ${TAAS_DB_URL:jdbc:postgresql://localhost:5432/taas}
+    username: ${TAAS_DB_USER:taas_user}
+    password: ${TAAS_DB_PASSWORD:taas_pass}
+  flyway:
+    locations: classpath:db/migration
+
+server:
+  port: ${TAAS_PORT:8085}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+taas:
+  # Comma-separated API keys accepted in the X-API-Key header (the gateway check).
+  # The default is for local development only; set TAAS_API_KEYS anywhere else.
+  api-keys: ${TAAS_API_KEYS:dev-key}
+  # How often the workflow engine looks for reservations whose hold has run out.
+  reservation-expiry-interval-ms: 30000
