@@ -49,6 +49,17 @@ public class Registry {
         return jdbc.query("SELECT * FROM reservation WHERE id = ?", this::mapReservation, id).stream().findFirst();
     }
 
+    /** A token's reservations, newest first, optionally only those in one status. */
+    public List<Reservation> reservations(String tokenCode, ReservationStatus status) {
+        if (status == null) {
+            return jdbc.query("SELECT * FROM reservation WHERE token_code = ? ORDER BY reserved_seq DESC LIMIT 200",
+                    this::mapReservation, tokenCode);
+        }
+        return jdbc.query("""
+                SELECT * FROM reservation WHERE token_code = ? AND status = ?
+                ORDER BY reserved_seq DESC LIMIT 200""", this::mapReservation, tokenCode, status.name());
+    }
+
     /** Held reservations whose hold has run out at {@code now}. */
     public List<UUID> overdueReservations(Instant now) {
         return jdbc.queryForList("SELECT id FROM reservation WHERE status = 'HELD' AND expires_at <= ? ORDER BY id",

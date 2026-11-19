@@ -87,6 +87,20 @@ public class Projector {
                 reservationsBefore.equals(reservationsAfter), diff(before, after));
     }
 
+    /**
+     * Deletes every projection (balances, postings, tokens, reservations) and returns the balances that
+     * were there, so a demo can show the replay rebuilding them. Nothing is lost: it is all derived from
+     * the Action Ledger, which this does not touch.
+     */
+    @Transactional
+    public Map<String, Long> wipeProjections() {
+        actions.lockForWrite();
+        Map<String, Long> before = tokenLedger.snapshot();
+        tokenLedger.wipe();
+        registry.wipe();
+        return before;
+    }
+
     /** Read-only integrity check: hash chain, balance table vs postings, and double-entry per event. */
     @Transactional(readOnly = true)
     public VerifyReport verify() {

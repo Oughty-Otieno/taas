@@ -340,6 +340,41 @@ class TaasApiTest {
         assertThat(projector.verify().consistent()).isTrue();
     }
 
+    // --- Demo page support -------------------------------------------------------------------------
+
+    @Test
+    void wipeEndpointEmptiesProjectionsAndReplayRestoresThem() throws Exception {
+        buildMixedHistory();
+        Map<String, Long> before = tokenLedger.snapshot();
+
+        JsonNode wiped = read(post("/api/admin/projections/wipe"));
+        assertThat(wiped.get("eventsInActionLedger").asLong()).isEqualTo(13);
+        assertThat(wiped.at("/balancesBefore/john|PTS").asLong()).isEqualTo(70);
+        assertThat(tokenLedger.snapshot()).isEmpty();
+        assertThat(read(get("/api/tokens")).size()).isZero();
+
+        read(post("/api/admin/replay"));
+        assertThat(tokenLedger.snapshot()).isEqualTo(before);
+    }
+
+    @Test
+    void listsReservationsAndNewestEventsFirst() throws Exception {
+        buildMixedHistory();
+        JsonNode all = read(get("/api/tokens/APT-101/reservations"));
+        assertThat(all).extracting(r -> r.get("status").asString()).containsExactly("HELD", "EXPIRED", "PURCHASED");
+        JsonNode held = read(get("/api/tokens/APT-101/reservations?status=HELD"));
+        assertThat(held.size()).isEqualTo(1);
+
+        JsonNode newest = read(get("/api/events?newestFirst=true&limit=2"));
+        assertThat(newest).extracting(e -> e.get("seq").asLong()).containsExactly(13L, 12L);
+    }
+
+    @Test
+    void servesTheDemoPageWithoutAnApiKey() throws Exception {
+        mvc.perform(get("/")).andExpect(status().isOk());
+        mvc.perform(get("/index.html")).andExpect(status().isOk());
+    }
+
     // --- Helpers ----------------------------------------------------------------------------------
 
     /** 13 events across a loyalty token and an asset token, including an expired reservation. */

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.taas.common.NotFoundException;
@@ -82,6 +83,12 @@ public class TokenController {
     @PostMapping("/{code}/reserve")
     public ResponseEntity<EventView> reserve(@PathVariable String code, @Valid @RequestBody Commands.Reserve body) {
         return respond(engine.reserve(code, body));
+    }
+
+    @GetMapping("/{code}/reservations")
+    public List<Registry.Reservation> reservations(@PathVariable String code,
+            @RequestParam(required = false) Registry.ReservationStatus status) {
+        return registry.reservations(code, status);
     }
 
     @GetMapping("/{code}/reservations/{id}")

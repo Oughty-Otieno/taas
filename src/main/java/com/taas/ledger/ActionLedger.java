@@ -75,13 +75,15 @@ public class ActionLedger {
         return jdbc.query("SELECT * FROM action_event WHERE tx_id = ?", rowMapper, txId).stream().findFirst();
     }
 
-    public List<ActionEvent> list(String tokenCode, long afterSeq, int limit) {
+    /** Events after {@code afterSeq}, oldest first, or with {@code newestFirst} the latest ones first. */
+    public List<ActionEvent> list(String tokenCode, long afterSeq, int limit, boolean newestFirst) {
+        String order = newestFirst ? "DESC" : "ASC";
         if (tokenCode == null) {
-            return jdbc.query("SELECT * FROM action_event WHERE seq > ? ORDER BY seq LIMIT ?", rowMapper,
-                    afterSeq, limit);
+            return jdbc.query("SELECT * FROM action_event WHERE seq > ? ORDER BY seq " + order + " LIMIT ?",
+                    rowMapper, afterSeq, limit);
         }
-        return jdbc.query("SELECT * FROM action_event WHERE token_code = ? AND seq > ? ORDER BY seq LIMIT ?",
-                rowMapper, tokenCode, afterSeq, limit);
+        return jdbc.query("SELECT * FROM action_event WHERE token_code = ? AND seq > ? ORDER BY seq " + order
+                + " LIMIT ?", rowMapper, tokenCode, afterSeq, limit);
     }
 
     /** Streams every event in sequence order, without loading the whole history into memory. */

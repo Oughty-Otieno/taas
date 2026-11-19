@@ -78,11 +78,28 @@ Needs Java 17+ and Postgres (local dev uses Postgres.app).
 ```bash
 psql -h localhost -d postgres -c "CREATE ROLE taas_user LOGIN PASSWORD 'taas_pass'" \
   -c "CREATE DATABASE taas OWNER taas_user" -c "CREATE DATABASE taas_test OWNER taas_user"
-mvn test                      # 19 tests, against taas_test
+mvn test                      # 22 tests, against taas_test
 mvn spring-boot:run           # http://localhost:8087, API key: dev-key
 ```
 
-Override with `TAAS_DB_URL`, `TAAS_DB_USER`, `TAAS_DB_PASSWORD`, `TAAS_API_KEYS`, `TAAS_PORT`.
+Override with `TAAS_DB_URL`, `TAAS_DB_USER`, `TAAS_DB_PASSWORD`, `TAAS_API_KEYS`, `TAAS_PORT`,
+`TAAS_DEMO_ENDPOINTS` (set `false` to turn off the wipe endpoint the demo page uses).
+
+## Demo page
+
+Open http://localhost:8087/ (it uses the `dev-key` API key by default). It shows all three parts at once:
+
+- **Workflow Engine**: forms for issue, earn, transfer, reserve, redeem and new token. Each request
+  carries a transaction id; **Send same txId again** shows a retry moving nothing.
+- **Token Ledger**: supply tiles, holders with their share, reservations with a live countdown and
+  Purchase / Release. Click a holder for their bank-style statement.
+- **Replay test**: **1 · Delete balance tables** empties every projection, **2 · Replay Action
+  Ledger** rebuilds them and shows before vs after, row by row. **Verify integrity** checks the hash
+  chain, double-entry and balances vs postings.
+- **Action Ledger**: every event, newest first, with its hash and the hash of the event before it.
+
+**Example data** loads the brief's John & Alice example and an apartment token with a sale and a
+reservation. Their transaction ids are fixed, so loading them again shows idempotent replays.
 
 ## API
 
@@ -102,10 +119,12 @@ Rule violations (overdraft, supply cap, expired reservation) are **422**.
 | POST | `/api/tokens/{code}/reservations/{id}/release` | `txId` |
 | POST | `/api/tokens/{code}/redeem` | `txId, account, amount, reference?` |
 | GET | `/api/tokens`, `/api/tokens/{code}` (with supply), `/api/tokens/{code}/holders` | |
+| GET | `/api/tokens/{code}/reservations?status=` | newest first |
 | GET | `/api/accounts/{account}/balances` | available + reserved for sale |
 | GET | `/api/accounts/{account}/statement?token=` | every movement with running balance |
-| GET | `/api/events?token=&afterSeq=&limit=`, `/api/events/{txId}` | the Action Ledger |
+| GET | `/api/events?token=&afterSeq=&limit=&newestFirst=`, `/api/events/{txId}` | the Action Ledger |
 | POST | `/api/admin/replay` | wipe all projections, rebuild from the Action Ledger, compare |
+| POST | `/api/admin/projections/wipe` | demo only: delete every projection, return the balances it held |
 | GET | `/api/admin/verify` | hash chain + balance table vs postings + double-entry check |
 
 ### Try the brief's example
@@ -136,4 +155,4 @@ chain and replay refuses to run), and 25 concurrent transfers that never overdra
 ## Status
 
 Prototype built 2026-11-19: Spring Boot 4.1.1, Java 17, Postgres, Flyway. Not yet: per-client keys
-and scopes, per-token sharding of the lock, a UI.
+and scopes, per-token sharding of the lock.

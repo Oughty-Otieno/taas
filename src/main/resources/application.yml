@@ -23,3 +23,5 @@ taas:
   api-keys: ${TAAS_API_KEYS:dev-key}
   # How often the workflow engine looks for reservations whose hold has run out.
   reservation-expiry-interval-ms: 30000
+  # Enables POST /api/admin/projections/wipe, used by the demo page to show the replay test.
+  demo-endpoints: ${TAAS_DEMO_ENDPOINTS:true}
