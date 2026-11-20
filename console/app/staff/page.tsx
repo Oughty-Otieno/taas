@@ -86,13 +86,14 @@ function AddUser({ onDone }: { onDone: (id: string) => void }) {
   return (
     <div className="panel">
       <h2>Add a user</h2>
-      <div style={{ display: "grid", gap: 8 }}>
+      <div className="form-stack">
         <label className="field">Full name<input value={f.displayName} onChange={(e) => setF({ ...f, displayName: e.target.value })} placeholder="Jane Wambui" /></label>
         <label className="field">Work email (kept out of the ledger)<input value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="jane@example.com" /></label>
         <label className="field">Role
           <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
-            {ROLES.map(([id, l, d]) => <option key={id} value={id}>{l}: {d}</option>)}
+            {ROLES.map(([id, l]) => <option key={id} value={id}>{l}</option>)}
           </select>
+          <span style={{ fontSize: 11.5 }}>{ROLES.find((r) => r[0] === f.role)?.[2]}</span>
         </label>
         <label className="field">User id (optional)<input value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })} placeholder="generated from the name" /></label>
         <button className="primary" onClick={submit} disabled={!f.displayName}>Add user</button>

@@ -102,7 +102,7 @@ function Register({ onDone }: { onDone: (id: string) => void }) {
   return (
     <div className="panel">
       <h2>Register a business</h2>
-      <div style={{ display: "grid", gap: 8 }}>
+      <div className="form-stack">
         <label className="field">Registered name<input value={f.name} onChange={set("name")} placeholder="Riverside Properties Ltd" /></label>
         <label className="field">Registration number<input value={f.registrationNo} onChange={set("registrationNo")} placeholder="PVT-2016-11873" /></label>
         <label className="field">Sector<input value={f.sector} onChange={set("sector")} placeholder="Real estate" /></label>
