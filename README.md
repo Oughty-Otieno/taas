@@ -103,6 +103,8 @@ Rejections are stored too. The same key with a different body is a 409.
 | POST | /v1/ledger/replay · /v1/ledger/wipe | ledger:admin | The replay test (wipe is a demo endpoint) |
 | GET · POST | /v1/rules · /v1/rules/versions | rules:read · rules:publish | Rule sets are versioned documents; publishing is a ledger event |
 | POST | /v1/rules/simulate | rules:read | Dry-run a rule set over recorded transactions |
+| GET · POST | /v1/businesses · /v1/businesses/{id}/decision | token:read · business:manage · business:review | Issuers: register, verify or suspend (four eyes) |
+| GET · POST | /v1/staff · /v1/staff/{id}/role · /status | staff:manage | Named staff users and their roles |
 | GET · POST | /v1/customers · /v1/customers/{id} | customer:read · customer:register | Customer directory (masked) with KYC history · register |
 | POST · DELETE | /v1/customers/{id}/kyc · /kyc/decision · /pii | kyc:submit · kyc:review | Submit for KYC · compliance decision or freeze · erase personal data |
 | POST | /v1/kyc/callback | HMAC signature | KYC provider webhook: `X-KYC-Timestamp` + `X-KYC-Signature` |
@@ -142,6 +144,8 @@ seed, the bid storm and the wipe endpoint). The console reads `NEXT_PUBLIC_TAAS_
 | `/ledger` | Action Ledger Explorer | Every movement has a reason: filters, drawer with raw event, movements, balances, decision, related events, inclusion proof; Verify Chain; the replay test |
 | `/operations` | Token operations | Issue, earn, transfer, redeem, reserve → order → pay, from forms |
 | `/customers` | Customers & KYC | Registration, tiered KYC with a provider and compliance review, freezing, erasure; a customer's own view |
+| `/businesses` | Businesses | The issuers behind the tokens: registered by an admin, verified by a second officer, assets listed under each |
+| `/staff` | Staff | Named staff users and their roles; disabling or re-roling takes effect at once |
 | `/rules` | Workflow Rule Studio | Rules are versioned data; edit, simulate against history (old vs new), publish |
 
 The console never computes a balance. Failures (rejections, failed payments) and reversals (expiries,
@@ -171,6 +175,9 @@ releases) are coloured differently in the tape.
 - **Access:** scopes are enforced (401/403); a customer can act only for their own account.
 - **Customers and KYC:** onboarding to tier 1, tier-2 referral decided by compliance, provider rejection, revoke
   freezes, erasure leaves no personal data in the ledger, unsigned callbacks refused.
+- **Businesses and staff:** four-eyes business verification, assets only under a verified issuer, a suspended issuer
+  cannot issue or sell, staff act under their own name, a disabled user's token stops working at once, the last admin
+  stays.
 
 ## Not built yet
 

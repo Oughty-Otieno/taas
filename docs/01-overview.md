@@ -65,6 +65,8 @@ flowchart LR
 | **Idempotency key** | A client-chosen string sent with every write. The same key always gets the same answer. |
 | **Outbox** | Rows written in the same transaction as the events, published to other systems after the commit. |
 | **KYC tier** | 0 = not verified; 1 = identity verified (purchases up to KES 100,000); 2 = address and source of funds verified (no limit). |
+| **Business** | The company behind a token: the issuer of an asset (Riverside Properties Ltd) or the operator of a loyalty programme. Verified by compliance before assets are listed under it. |
+| **Staff user** | A named person with one role (admin, rules manager, operations, compliance, auditor). The ledger records their actions under their user id. |
 | **Persona** | A sign-in role in the demo: admin, rules manager, operations, compliance, auditor, customer. |
 
 ## The example data
@@ -82,6 +84,9 @@ It then plays the brief's stories, including the failures: John earns 100 points
 sends 20 to Alice and redeems 10, leaving 70; Grace's KES 800 spend does not qualify; John's transfer of 500 is
 refused; Alice and Bob buy apartment shares; Peter (no KYC) is refused; Mary reserves tower units and never pays
 (they come back after 60 seconds); Grace's 2,500-unit tower bid is above the 20% cap and the database refuses it.
+
+It also registers the business behind each token (M-Rewards Ltd, Riverside Properties Ltd, Nakuru Towers Ltd and
+Murang'a Avocado Growers Co-operative), has a second officer verify each, and names it as the token's issuer.
 
 The customers are John, Alice, Mary, Bob and Grace (verified, tier 2), Peter (not verified) and `bidder-01`…`bidder-20`
 (verified; used by the bid storm).

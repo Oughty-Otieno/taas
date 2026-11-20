@@ -3,37 +3,34 @@
 ## System context
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph Clients
-        CON[Next.js console<br/>console/]
-        PAR[Partner apps / POS / M-PESA integrations]
+        CON[Next.js console]
+        PAR[Partner apps<br/>POS, M-PESA]
     end
-    subgraph TaaS["TaaS backend (Spring Boot, one process)"]
-        GW[Gateway<br/>Spring Security: JWT + scope per route<br/>CommandRunner: idempotency]
-        ENG[Workflow Engine<br/>WorkflowEngine, CustomerService]
-        RE[Rules engine<br/>RuleEngine, RuleSimulator]
-        PDP[Policy decision point<br/>KYC, frozen, velocity, account binding]
-        TM[Timers<br/>reservation expiry, loyalty inactivity]
+    subgraph TaaS["TaaS backend: one Spring Boot process"]
+        GW[Gateway<br/>JWT scope check<br/>idempotency]
+        ENG[Workflow Engine]
+        RE[Rules engine]
+        PDP[Policy decision point]
+        TM[Timers]
         OB[Outbox poller]
     end
-    DB[(PostgreSQL<br/>action_event · token_movement · holding<br/>projections · idempotency · outbox · customers)]
-    PSP[Payment provider<br/>FakePsp in the demo]
-    KYC[KYC provider<br/>FakeKycProvider in the demo]
-    HOOK[Webhook receivers]
-
-    CON & PAR -->|HTTPS, Bearer JWT, Idempotency-Key| GW
+    DB[(PostgreSQL<br/>both ledgers, projections,<br/>outbox, customers)]
+    subgraph External["External services"]
+        PSP[Payment provider]
+        KYC[KYC provider]
+        HOOK[Webhook receivers]
+    end
+    CON & PAR -->|Bearer JWT, Idempotency-Key| GW
     GW --> ENG
-    ENG --> RE
-    ENG --> PDP
+    ENG --> RE & PDP
     TM --> ENG
     ENG -->|one transaction| DB
-    OB -->|polls committed rows| DB
-    OB -->|charge| PSP
-    OB -->|submit| KYC
-    OB -->|signed POST| HOOK
-    OB -->|SSE| CON
-    PSP -->|HMAC-signed callback| GW
-    KYC -->|HMAC-signed callback| GW
+    DB -->|committed rows| OB
+    OB --> PSP & KYC & HOOK
+    OB -.->|SSE| CON
+    PSP & KYC -.->|HMAC-signed callbacks| GW
 ```
 
 Everything runs in one Spring Boot process against one PostgreSQL database. The brief's Kafka and Redis are not

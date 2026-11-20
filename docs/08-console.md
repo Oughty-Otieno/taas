@@ -8,7 +8,8 @@ Open <http://localhost:3000>. The first time, click **Load example data**.
 
 ## Signing in
 
-The menu at the top right signs you in as a role (see [roles and scopes](06-security-and-kyc.md#who-can-do-what-roles-and-scopes)).
+The menu at the top right signs you in as the demo operator, as a **named staff user** (managed on the Staff page), or
+as a customer. Each user holds one role (see [roles and scopes](06-security-and-kyc.md#who-can-do-what-roles-and-scopes)).
 Choosing **Customer** asks which account. The page reloads with a token for that role. Screens a role cannot use say
 so and name the missing scope instead of failing quietly. The choice is remembered in the browser.
 
@@ -20,6 +21,8 @@ so and name the missing scope instead of failing quietly. The choice is remember
 | `/operations` | **Token operations** | operations, admin, demo | Forms for every movement: Issue, Earn (submit a transaction), Transfer, Redeem, Reserve → Order → Pay; open reservations with Release and Order buttons |
 | `/flows` | **Two flows, one platform** | presenters | A loyalty award and an asset purchase side by side, step by step, through the same path; the payment-failure and timer-wins variants; the bid-storm concurrency test |
 | `/customers` | **Customers & KYC** | operations, compliance, auditor, customers | Staff: the directory with filters and a "needs review" queue, registration, and a panel per customer with actions, holdings and KYC history. Customers: "My verification", their history and portfolio |
+| `/businesses` | **Businesses** | admin, compliance, everyone (read) | The issuers: register a business, verify or suspend it (a second officer), add an asset under it and issue its supply, name the issuer of an older token, and its ledger history |
+| `/staff` | **Staff** | admin | Named users and their roles: add, change role, disable or re-enable, and what each person has done recently |
 | `/ledger` | **Action Ledger Explorer** | auditor, admin, operations | Filterable event list. Each event opens a drawer: the decision, the movements, the affected balances, related events, the hash chain and the raw event. Integrity check (Verify chain) and the replay test |
 | `/rules` | **Workflow Rule Studio** | rules manager | Version history; a form editor for the next version; **Try a transaction** with a rule-by-rule trace; **simulation** over past transactions (what was awarded vs the draft, by customer); Publish; the policy catalogue |
 

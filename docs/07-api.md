@@ -17,6 +17,9 @@ Base URL locally: `http://localhost:8087`. Interactive docs: <http://localhost:8
 ## Getting a token
 
 ```bash
+# Sign in as a named staff user (demo only); the ledger then records their actions under their id
+curl -s -X POST localhost:8087/v1/dev/token -H 'Content-Type: application/json' -d '{"userId":"amina.yusuf"}'
+
 # Sign in as a role (demo only). Personas: demo, admin, rules-manager, operations, compliance, auditor, customer
 TOKEN=$(curl -s -X POST localhost:8087/v1/dev/token -H 'Content-Type: application/json' \
   -d '{"persona":"operations"}' | jq -r .access_token)
@@ -73,6 +76,21 @@ the timer wins.
 | DELETE | `/v1/customers/{id}/pii` | `kyc:review` | Erase personal data → `PII_ERASED` |
 | POST | `/v1/kyc/callback` | HMAC | `{providerEventId, caseId, accountId, result: VERIFIED\|REJECTED\|REFERRED, tier?, reason?}` with `X-KYC-Timestamp`, `X-KYC-Signature` |
 
+### Businesses and staff
+
+| Method | Path | Scope | Body / notes |
+|---|---|---|---|
+| GET | `/v1/businesses` · `/v1/businesses/{id}` | `token:read` | Directory with each business's tokens · detail with its ledger history |
+| POST | `/v1/businesses` | `business:manage` | `{businessId?, name, registrationNo, sector?, payoutAccount?, description?}` → `BUSINESS_REGISTERED` (PENDING) |
+| POST | `/v1/businesses/{id}/decision` | `business:review` | `{decision: VERIFY \| SUSPEND, reason}` (reason required to suspend) |
+| POST | `/v1/tokens/{tokenId}/issuer` | `business:manage` | `{issuerId}` → `TOKEN_ISSUER_ASSIGNED` |
+| GET | `/v1/staff` · `/v1/staff/{id}` | `staff:manage` | Users · one user with the changes to their account and their recent actions |
+| POST | `/v1/staff` | `staff:manage` | `{userId?, displayName, email?, role}` → `STAFF_USER_CREATED` |
+| POST | `/v1/staff/{id}/role` | `staff:manage` | `{role}` → `STAFF_ROLE_CHANGED` |
+| POST | `/v1/staff/{id}/status` | `staff:manage` | `{status: ACTIVE \| DISABLED, reason}` (reason required to disable) |
+
+`POST /v1/tokens` also accepts `issuerId`, the business issuing the token.
+
 ### Action Ledger
 
 | Method | Path | Scope | Notes |
@@ -100,6 +118,7 @@ the timer wins.
 | Method | Path | Scope | Notes |
 |---|---|---|---|
 | GET | `/v1/dev/personas` | public | The sign-in roles |
+| GET | `/v1/dev/users` | public | The active staff users, for the sign-in menu |
 | POST | `/v1/dev/token` | public | Issue a token ([above](#getting-a-token)) |
 | POST | `/v1/dev/seed` | `ledger:admin` | Example data. Fixed keys, so running it twice changes nothing |
 | POST | `/v1/dev/bid-storm` | `ledger:admin` | `{tokenId?, bids?, buyers?, units?, holdSeconds?}` parallel reservations |
@@ -128,6 +147,11 @@ the timer wins.
 | 422 | `SUPPLY_CEILING` | The database refused: issuing would exceed the authorised supply |
 | 422 | `NO_ACTIVE_RULES` | The rule set has no version in force |
 | 422 | `UNDERAGE`, `NO_PERSONAL_DATA` | Onboarding rules |
+| 422 | `ISSUER_NOT_VERIFIED` | Assets can be listed only under a verified business |
+| 403 | `ISSUER_SUSPENDED` | The token's business is suspended: no new issuance or sales |
+| 403 | `FOUR_EYES` | The person who registered a business cannot verify it |
+| 403 | `CANNOT_CHANGE_SELF` | Staff cannot change their own role or status |
+| 409 | `BUSINESS_EXISTS`, `REGISTRATION_EXISTS`, `ISSUER_ALREADY_SET`, `USER_EXISTS`, `NO_CHANGE`, `LAST_ADMIN` | Business and staff conflicts |
 | 429 | `VELOCITY_LIMIT` | Too many transfers in the last hour |
 
 Every coded rejection (403/409/422/429 with a `code`) is recorded as `REQUEST_REJECTED`.

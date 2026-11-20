@@ -56,7 +56,7 @@ KYC provider (`auto-callback`, `callback-delay-ms`).
 ## Tests
 
 ```bash
-mvn test          # 42 tests against the taas_test database
+mvn test          # 50 tests against the taas_test database
 ```
 
 `PlatformTestBase` truncates every table before each test and resets the seeded customers. Tests use a
@@ -69,6 +69,7 @@ callbacks; tests drive them explicitly.
 | `LedgerTest` | 8 | The brief's examples (John → Alice; issue 100 / transfer 20 / redeem 10 = 70); replay rebuilds identical holdings and workflow state; UPDATE and DELETE refused; tamper detection blocks replay; inclusion proofs; idempotency (5 parallel requests, one record; a different body gets 409; a stored rejection replays) |
 | `WorkflowTest` | 19 | 200 parallel bids never breach the cap or oversell; the cap counts reservations and applies to transfers; supply ceiling; reserve → order → signed callback → purchase; bad and stale signatures refused; payment failure returns units; the timer wins, a later order gets 409 and a late payment records a refund; KYC deny recorded; velocity; loyalty inactivity; scopes enforced (401/403) |
 | `RulesTest` | 7 | v7 tiers and overlap resolution; declined awards recorded; publishing is a ledger event; code-execution expressions refused; simulation; evaluate |
+| `BusinessStaffTest` | 8 | Four-eyes business verification; assets only under a verified issuer; a suspended issuer cannot issue or sell while holders keep their rights; naming an issuer for an older token, rebuilt by replay; staff act under their own name with email kept out of the ledger; disabling or re-roling revokes a token at once; nobody changes themselves and the last admin stays; the sign-in menu lists active users only |
 | `CustomerTest` | 8 | Account binding; role scopes; onboarding to tier 1; tier-2 referral decided by compliance; provider rejection; revoke freezes; erasure (no personal data in the ledger); unsigned callback refused |
 
 ## Troubleshooting

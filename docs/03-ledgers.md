@@ -57,6 +57,14 @@ The outcome decides the colour on screen: successes, declines, reversals and fai
 | `KYC_REJECTED` | failed | none |
 | `KYC_REVOKED` | reversed | none |
 | `PII_ERASED` | OK | none |
+| `BUSINESS_REGISTERED` | OK | none (creates a `business` row) |
+| `BUSINESS_VERIFIED` | OK | none (also reinstates a suspended business) |
+| `BUSINESS_SUSPENDED` | reversed | none |
+| `TOKEN_ISSUER_ASSIGNED` | OK | none (names the issuer of a token defined without one) |
+| `STAFF_USER_CREATED` | OK | none |
+| `STAFF_ROLE_CHANGED` | OK | none |
+| `STAFF_USER_DISABLED` | reversed | none |
+| `STAFF_USER_ENABLED` | OK | none |
 | `REQUEST_REJECTED` | failed | none (records the refused request, its code and reason) |
 
 The mapping from event to movements is in exactly one place, `MovementRules.legsFor`. The live write path and the
@@ -124,12 +132,14 @@ Everything except the Action Ledger is either derived from it, or explicitly not
 
 | Table | Derived from the ledger? | Rebuilt by replay? |
 |---|---|---|
-| `token` | yes (`TOKEN_DEFINED`) | yes |
+| `token` | yes (`TOKEN_DEFINED`, `TOKEN_ISSUER_ASSIGNED`) | yes |
+| `business` | yes (`BUSINESS_*`) | yes |
 | `token_movement`, `holding` | yes | yes |
 | `reservation`, `purchase_order` | yes | yes |
 | `rule_set_version` | yes (`RULE_VERSION_PUBLISHED`) | yes |
 | `idempotency_record` | no: stored replies | no |
 | `outbox` | no: delivery bookkeeping | no |
+| `staff_user` | no: operational, like the customer directory; the ledger keeps every change | no |
 | `account_profile`, `customer_pii` | no: operational customer data (see [KYC](06-security-and-kyc.md#why-customer-data-is-not-a-projection)) | no |
 
 **Replay** (`POST /v1/ledger/replay`, scope `ledger:admin`), in one transaction:
