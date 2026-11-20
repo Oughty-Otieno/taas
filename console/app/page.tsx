@@ -15,6 +15,7 @@ type Summary = {
   supply: { authorised: number; issued: number; inTreasury: number; reserved: number; redeemed: number; circulating: number; owners: number };
   value: { unitPriceKes: number | null; valuationKes: number | null; redeemValueKes: number | null; ownedValueKes: number | null; liabilityKes: number | null };
   activeRuleSet: string;
+  issuer: { businessId: string; name: string; status: string } | null;
 };
 
 const STAGES: { name: string; types: string[] }[] = [
@@ -108,6 +109,10 @@ function TokenCard({ t }: { t: Summary }) {
           <h2>{token.name}</h2>
           <div className="kind">
             <code>{token.tokenId}</code> · {asset ? `Real-world asset · ${token.assetType}` : "Loyalty"}
+          </div>
+          <div className="kind">
+            Issued by {t.issuer ? <Link href="/businesses">{t.issuer.name}</Link> : <span className="muted">no business recorded</span>}
+            {t.issuer?.status === "SUSPENDED" && <span className="pill pill-REVERSED" style={{ marginLeft: 6 }}>issuer suspended</span>}
           </div>
         </div>
         <span className={`pill ${asset ? "pill-info" : "pill-OK"}`}>{asset ? token.assetType : "Loyalty"}</span>

@@ -83,6 +83,9 @@ public class WorkflowEngine {
             if (registry.token(c.tokenId()).isPresent()) {
                 throw Rejection.conflict("TOKEN_EXISTS", "Token " + c.tokenId() + " is already defined");
             }
+            if (c.issuerId() != null) {
+                requireVerifiedIssuer(c.issuerId());
+            }
             Integer percent = c.maxHolderPercent() != null ? c.maxHolderPercent() : asset ? Integer.valueOf(20) : null;
             SortedMap<String, String> p = fields(
                     "name", c.name(), "kind", c.kind(), "assetType", c.assetType(), "backing", c.backing(),
@@ -93,7 +96,7 @@ public class WorkflowEngine {
                     "kycRequired", c.kycRequired() != null ? c.kycRequired() : asset,
                     "inactivityMonths", asset ? null : c.inactivityMonths(),
                     "ruleSetId", asset ? null : c.ruleSetId() != null ? c.ruleSetId() : defaultRuleSet,
-                    "policyVersion", "v1");
+                    "policyVersion", "v1", "issuerId", c.issuerId());
             ActionEvent e = tx.record(EventType.TOKEN_DEFINED, c.tokenId(), c.tokenId(),
                     "policy:" + c.tokenId() + "@v1", p);
             return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "tokenId", c.tokenId()));
@@ -105,6 +108,7 @@ public class WorkflowEngine {
         Command cmd = new Command("issue", c.tokenId(), c.tokenId(), c);
         return runner.execute(caller, cmd, null, tx -> {
             lock(token.tokenId());
+            requireIssuerActive(token.tokenId());
             ActionEvent e = tx.record(EventType.TOKEN_ISSUED, token.tokenId(), token.tokenId(),
                     token.policyRuleVersion(), fields("units", c.units(), "reference", c.reference()));
             return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "tokenId", token.tokenId(), "units",
@@ -219,6 +223,7 @@ public class WorkflowEngine {
         return runner.execute(caller, cmd, policy, tx -> {
             lock(token.tokenId());
             policy.run();   // re-checked at commit
+            requireIssuerActive(token.tokenId());
             long maxHold = token.reservationMinutes() * 60L;
             long hold = c.holdSeconds() == null ? maxHold : Math.min(c.holdSeconds(), maxHold);
             Instant expiresAt = tx.now().plusSeconds(hold);
@@ -434,6 +439,24 @@ public class WorkflowEngine {
     }
 
     // ---------------------------------------------------------------------------------------------
+
+    /** A business may have new assets listed under it only once compliance has verified it. */
+    public void requireVerifiedIssuer(String businessId) {
+        Registry.Business b = registry.business(businessId)
+                .orElseThrow(() -> new NotFoundException("Business " + businessId + " not found"));
+        if (b.status() != Registry.BusinessStatus.VERIFIED) {
+            throw Rejection.rule("ISSUER_NOT_VERIFIED", b.name() + " is " + b.status().name().toLowerCase()
+                    + "; a business must be verified before assets are listed under it");
+        }
+    }
+
+    /** A suspended issuer cannot mint or sell new units. Holders keep theirs and may still transfer and redeem. */
+    private void requireIssuerActive(String tokenId) {
+        registry.issuerOf(tokenId).filter(b -> b.status() == Registry.BusinessStatus.SUSPENDED).ifPresent(b -> {
+            throw new Rejection(org.springframework.http.HttpStatus.FORBIDDEN, "ISSUER_SUSPENDED", b.name()
+                    + " is suspended: no new " + tokenId + " units can be issued or sold");
+        });
+    }
 
     private void eligibility(TokenDef token, String accountId, long amountKes) {
         if (token.kycRequired()) {

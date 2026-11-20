@@ -10,11 +10,14 @@ const LINKS = [
   { href: "/operations", label: "Operations" },
   { href: "/flows", label: "Two Flows, One Platform" },
   { href: "/customers", label: "Customers & KYC" },
+  { href: "/businesses", label: "Businesses" },
   { href: "/ledger", label: "Action Ledger" },
   { href: "/rules", label: "Rule Studio" },
+  { href: "/staff", label: "Staff" },
 ];
 
 type Persona = { id: string; label: string; description: string; scopes: string[]; boundToAccount: boolean };
+type StaffUser = { userId: string; displayName: string; role: string; roleLabel: string };
 
 export default function Nav() {
   const path = usePathname();
@@ -44,6 +47,7 @@ export default function Nav() {
       <span className={`dot ${live ? "dot-on" : ""}`}>{live ? "ledger live" : session && !session.scopes.includes("ledger:read") ? "no ledger access" : "connecting"}</span>
       <div style={{ position: "relative" }}>
         <button onClick={() => setOpen((o) => !o)} title={session?.scopes.join(" ")}>
+          {session?.name ? `${session.name} · ` : ""}
           {current ? current.label : session?.persona ?? "Signing in…"}
           {session?.accountId ? ` · ${session.accountId}` : ""} ▾
         </button>
@@ -56,6 +60,10 @@ export default function Nav() {
 function SignIn({ personas, onClose }: { personas: Persona[]; onClose: () => void }) {
   const [accounts, setAccounts] = useState<{ accountId: string; displayName: string; kycStatus: string }[]>([]);
   const [account, setAccount] = useState("john");
+  const [users, setUsers] = useState<StaffUser[]>([]);
+  useEffect(() => {
+    fetch(`${API}/v1/dev/users`).then((r) => r.json()).then(setUsers).catch(() => {});
+  }, []);
 
   useEffect(() => {
     // Listing who can sign in is itself a staff read: borrow an auditor's token for it.
@@ -76,13 +84,22 @@ function SignIn({ personas, onClose }: { personas: Persona[]; onClose: () => voi
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
         Each role gets a token with only its scopes. A real deployment signs people in through an identity provider.
       </div>
-      {personas.filter((p) => !p.boundToAccount).map((p) => (
+      {personas.filter((p) => p.id === "demo").map((p) => (
         <button key={p.id} className="signin-row" onClick={() => signIn(p.id)}>
           <b>{p.label}</b>
           <span className="muted">{p.description}</span>
-          <code className="scopes">{p.scopes.join(" ")}</code>
         </button>
       ))}
+      <div className="muted" style={{ fontSize: 12, margin: "10px 0 4px" }}>Staff (managed on the Staff page)</div>
+      {users.map((u) => {
+        const p = personas.find((x) => x.id === u.role);
+        return (
+          <button key={u.userId} className="signin-row" onClick={() => signIn(u.role, null, u.userId)} title={p?.scopes.join(" ")}>
+            <b>{u.displayName}</b>
+            <span className="muted">{u.roleLabel}{p ? ` · ${p.description}` : ""}</span>
+          </button>
+        );
+      })}
       {personas.filter((p) => p.boundToAccount).map((p) => (
         <div key={p.id} className="signin-row">
           <b>{p.label}</b>

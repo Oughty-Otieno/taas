@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Action, can, get, label, short, time, who, useSession, useStream } from "@/lib/api";
+import { Action, can, get, label, Result, short, time, who, useSession, useStream } from "@/lib/api";
 
 export function Outcome({ outcome, code }: { outcome: string; code?: string }) {
   const text = code ?? { OK: "Committed", DECLINED: "Declined", REVERSED: "Reversed", FAILED: "Failed" }[outcome] ?? outcome;
@@ -97,5 +97,38 @@ export function Requires({ anyOf, what, children }: { anyOf: string[]; what: str
       Signed in as <b>{session.subject}</b>, whose token does not include <code>{anyOf.join(" or ")}</code>.
       {" "}{what} Switch role with the sign-in menu (top right).
     </div>
+  );
+}
+
+/** The answer to a write: "Done", or the refusal's code and reason. */
+export function ResultNote({ r, ok: okText }: { r: Result | null; ok?: string }) {
+  if (!r) return null;
+  const ok = r.status < 300;
+  return (
+    <div className={`banner ${ok ? "banner-ok" : "banner-bad"}`}>
+      {ok ? <>Done ({r.status}). {okText}</> : <><b>{r.body?.code ?? r.body?.title ?? `HTTP ${r.status}`}</b> {r.body?.detail}</>}
+    </div>
+  );
+}
+
+/** Ledger events about one subject, newest first, with who did each and why. */
+export function EventTimeline({ items, empty = "No events." }: { items: Action[]; empty?: string }) {
+  if (!items.length) return <div className="muted">{empty}</div>;
+  return (
+    <ul className="timeline">
+      {items.map((a) => (
+        <li key={a.id} className={`t-${a.outcome}`}>
+          <b>{a.eventType === "REQUEST_REJECTED" ? `${(a.payload.operation ?? "").replace(/-/g, " ")} rejected` : label(a.eventType)}</b>{" "}
+          <span className="muted">#{a.seq} · {time(a.occurredAt)} · {a.actorId}</span>
+          {(a.payload.reason || a.payload.code || a.tokenId || a.payload.toRole) && (
+            <div className="muted">
+              {a.payload.code && <code>{a.payload.code}</code>} {a.tokenId && a.eventType !== "REQUEST_REJECTED" && `${a.tokenId}. `}
+              {a.payload.fromRole && `${a.payload.fromRole} → ${a.payload.toRole}. `}
+              {a.payload.reason}
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }

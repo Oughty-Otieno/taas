@@ -78,7 +78,7 @@ abstract class PlatformTestBase {
         // History refuses TRUNCATE; tests lift that guard only to start from an empty ledger.
         jdbc.execute("ALTER TABLE action_event DISABLE TRIGGER action_event_no_truncate");
         jdbc.execute("TRUNCATE outbox, idempotency_record, token_movement, holding, reservation, purchase_order,"
-                + " rule_set_version, token, action_event RESTART IDENTITY");
+                + " rule_set_version, token, business, action_event RESTART IDENTITY");
         jdbc.execute("ALTER TABLE action_event ENABLE TRIGGER action_event_no_truncate");
         // Customers back to the migration's seed: the imported ones verified, peter without KYC.
         jdbc.update("DELETE FROM customer_pii");
@@ -87,6 +87,12 @@ abstract class PlatformTestBase {
                 UPDATE account_profile SET kyc_status = CASE WHEN account_id = 'peter' THEN 'NONE' ELSE 'VERIFIED' END,
                        kyc_tier = CASE WHEN account_id = 'peter' THEN 0 ELSE 2 END, kyc_case_id = NULL,
                        kyc_tier_requested = NULL, kyc_review = NULL, kyc_note = NULL""");
+        // Staff back to the migration's five users, one per role, all active.
+        jdbc.update("DELETE FROM staff_user WHERE created_by <> 'migration'");
+        jdbc.update("""
+                UPDATE staff_user SET status = 'ACTIVE', status_note = NULL, role = CASE user_id
+                    WHEN 'amina.yusuf' THEN 'admin' WHEN 'brian.odhiambo' THEN 'rules-manager'
+                    WHEN 'faith.chebet' THEN 'operations' WHEN 'david.mwangi' THEN 'compliance' ELSE 'auditor' END""");
         clock.reset();
     }
 
