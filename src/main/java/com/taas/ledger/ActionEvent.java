@@ -1,18 +1,24 @@
 package com.taas.ledger;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.UUID;
 
-/** One immutable entry in the Action Ledger: what happened, to which token, and why. */
+import com.taas.common.Hashes;
+
+/** One immutable entry in the Action Ledger: what happened, who caused it, under which rules, and why. */
 public record ActionEvent(
+        UUID id,
         long seq,
-        UUID eventId,
-        String txId,
         EventType type,
-        String tokenCode,
+        String subjectId,
+        String tokenId,
+        String actorId,
+        String idempotencyKey,
+        String ruleVersion,
         SortedMap<String, String> payload,
-        String requestHash,
         Instant occurredAt,
         String prevHash,
         String hash) {
@@ -25,6 +31,10 @@ public record ActionEvent(
         return value;
     }
 
+    public String opt(String field) {
+        return payload.get(field);
+    }
+
     public long getLong(String field) {
         return Long.parseLong(get(field));
     }
@@ -35,13 +45,26 @@ public record ActionEvent(
 
     /** The hash this event should carry, recomputed from its own content and its predecessor's hash. */
     public String expectedHash() {
-        return computeHash(seq, eventId, txId, type, tokenCode, payload, requestHash, occurredAt, prevHash);
+        return computeHash(id, seq, type, subjectId, tokenId, actorId, idempotencyKey, ruleVersion, payload,
+                occurredAt, prevHash);
     }
 
-    static String computeHash(long seq, UUID eventId, String txId, EventType type, String tokenCode,
-            SortedMap<String, String> payload, String requestHash, Instant occurredAt, String prevHash) {
-        return Hashes.sha256(String.join("\n",
-                Long.toString(seq), eventId.toString(), txId, type.name(), tokenCode, occurredAt.toString(),
-                Hashes.canonical(payload), requestHash, prevHash));
+    /** {@code sha256(prev_hash || canonical(event))}, where the canonical form covers every column. */
+    static String computeHash(UUID id, long seq, EventType type, String subjectId, String tokenId, String actorId,
+            String idempotencyKey, String ruleVersion, SortedMap<String, String> payload, Instant occurredAt,
+            String prevHash) {
+        SortedMap<String, String> row = new TreeMap<>();
+        row.put("id", id.toString());
+        row.put("seq", Long.toString(seq));
+        row.put("event_type", type.name());
+        row.put("subject_id", subjectId);
+        row.put("token_id", tokenId == null ? "" : tokenId);
+        row.put("actor_id", actorId);
+        row.put("idempotency_key", idempotencyKey);
+        row.put("rule_version", ruleVersion);
+        row.put("occurred_at", occurredAt.toString());
+        row.put("payload", Hashes.canonical(payload));
+        return Hashes.hex(Hashes.sha256(Hashes.unhex(prevHash),
+                Hashes.canonical(row).getBytes(StandardCharsets.UTF_8)));
     }
 }

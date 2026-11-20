@@ -1,125 +1,115 @@
 package com.taas.api;
 
+import java.time.Clock;
 import java.util.List;
-import java.util.UUID;
 
 import jakarta.validation.Valid;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.taas.common.NotFoundException;
+import com.taas.ledger.ActionLedger;
 import com.taas.ledger.Registry;
+import com.taas.ledger.Registry.TokenDef;
 import com.taas.ledger.TokenLedger;
 import com.taas.workflow.Commands;
 import com.taas.workflow.WorkflowEngine;
 
-/**
- * The common token operations. A new transaction answers 201; repeating a txId with the same request
- * answers 200 with the original event and {@code Idempotent-Replay: true}, and moves nothing.
- */
+/** The token catalogue, with every figure derived from the ledger: nothing here is a stored balance. */
 @RestController
-@RequestMapping("/api/tokens")
+@RequestMapping("/v1")
 public class TokenController {
 
-    public record TokenView(Registry.TokenDef token, TokenLedger.Supply supply) {
+    public record Holder(String accountId, long available, long reserved, long total, double sharePercent) {
     }
 
-    private final WorkflowEngine engine;
+    /** Values computed from derived units and the token's published prices. */
+    public record Value(Long unitPriceKes, Long valuationKes, Long redeemValueKes, Long ownedValueKes,
+            Long liabilityKes) {
+    }
+
+    public record TokenSummary(TokenDef token, Long capUnits, TokenLedger.Supply supply, Value value,
+            String activeRuleSet) {
+    }
+
+    public record TokenDetail(TokenDef token, Long capUnits, TokenLedger.Supply supply, Value value,
+            String activeRuleSet, List<Holder> holders, List<ActionView> recent) {
+    }
+
     private final Registry registry;
     private final TokenLedger tokenLedger;
+    private final ActionLedger actions;
+    private final WorkflowEngine engine;
+    private final Clock clock;
 
-    public TokenController(WorkflowEngine engine, Registry registry, TokenLedger tokenLedger) {
-        this.engine = engine;
+    public TokenController(Registry registry, TokenLedger tokenLedger, ActionLedger actions, WorkflowEngine engine,
+            Clock clock) {
         this.registry = registry;
         this.tokenLedger = tokenLedger;
+        this.actions = actions;
+        this.engine = engine;
+        this.clock = clock;
     }
 
-    @PostMapping
-    public ResponseEntity<EventView> create(@Valid @RequestBody Commands.CreateToken body) {
-        return respond(engine.createToken(body));
+    @GetMapping("/tokens")
+    public List<TokenSummary> list() {
+        return registry.tokens().stream().map(t -> {
+            TokenLedger.Supply s = tokenLedger.supply(t.tokenId(), t.authorisedSupply());
+            return new TokenSummary(t, t.capUnits(), s, value(t, s), activeRuleSet(t));
+        }).toList();
     }
 
-    @GetMapping
-    public List<Registry.TokenDef> list() {
-        return registry.tokens();
+    @GetMapping("/tokens/{tokenId}")
+    public TokenDetail get(@PathVariable String tokenId) {
+        TokenDef t = registry.token(tokenId).orElseThrow(() -> new NotFoundException("Token " + tokenId + " not found"));
+        TokenLedger.Supply s = tokenLedger.supply(tokenId, t.authorisedSupply());
+        long base = Math.max(1, s.issued() - s.redeemed());
+        List<Holder> holders = tokenLedger.holders(tokenId, 20).stream()
+                .map(h -> new Holder(h.accountId(), h.available(), h.reserved(), h.total(),
+                        Math.round(h.total() * 10000.0 / (t.kind() == Registry.TokenKind.ASSET ? t.authorisedSupply()
+                                : base)) / 100.0))
+                .toList();
+        ActionLedger.Filter f = new ActionLedger.Filter(tokenId, null, null, null, List.of(), null, null, null);
+        List<ActionView> recent = actions.list(f, null, 15, true).stream().map(ActionView::of).toList();
+        return new TokenDetail(t, t.capUnits(), s, value(t, s), activeRuleSet(t), holders, recent);
     }
 
-    @GetMapping("/{code}")
-    public TokenView get(@PathVariable String code) {
-        Registry.TokenDef token = registry.token(code)
-                .orElseThrow(() -> new NotFoundException("Token " + code + " not found"));
-        return new TokenView(token, tokenLedger.supply(code));
+    @PostMapping("/tokens")
+    public ResponseEntity<Object> define(@AuthenticationPrincipal Jwt jwt,
+            @RequestHeader(Http.IDEMPOTENCY_KEY) String key, @Valid @RequestBody Commands.DefineToken body) {
+        return Http.send(engine.defineToken(Http.caller(jwt, key), body));
     }
 
-    @GetMapping("/{code}/holders")
-    public List<TokenLedger.Holder> holders(@PathVariable String code) {
-        return tokenLedger.holders(code);
+    /** Mint into the treasury. Admin only (token:issue). */
+    @PostMapping("/issuances")
+    public ResponseEntity<Object> issue(@AuthenticationPrincipal Jwt jwt,
+            @RequestHeader(Http.IDEMPOTENCY_KEY) String key, @Valid @RequestBody Commands.Issue body) {
+        return Http.send(engine.issue(Http.caller(jwt, key), body));
     }
 
-    @PostMapping("/{code}/issue")
-    public ResponseEntity<EventView> issue(@PathVariable String code, @Valid @RequestBody Commands.Issue body) {
-        return respond(engine.issue(code, body));
-    }
-
-    @PostMapping("/{code}/earn")
-    public ResponseEntity<EventView> earn(@PathVariable String code, @Valid @RequestBody Commands.Earn body) {
-        return respond(engine.earn(code, body));
-    }
-
-    @PostMapping("/{code}/transfer")
-    public ResponseEntity<EventView> transfer(@PathVariable String code,
-            @Valid @RequestBody Commands.Transfer body) {
-        return respond(engine.transfer(code, body));
-    }
-
-    @PostMapping("/{code}/reserve")
-    public ResponseEntity<EventView> reserve(@PathVariable String code, @Valid @RequestBody Commands.Reserve body) {
-        return respond(engine.reserve(code, body));
-    }
-
-    @GetMapping("/{code}/reservations")
-    public List<Registry.Reservation> reservations(@PathVariable String code,
-            @RequestParam(required = false) Registry.ReservationStatus status) {
-        return registry.reservations(code, status);
-    }
-
-    @GetMapping("/{code}/reservations/{id}")
-    public Registry.Reservation reservation(@PathVariable String code, @PathVariable UUID id) {
-        return registry.reservation(id)
-                .filter(r -> r.tokenCode().equals(code))
-                .orElseThrow(() -> new NotFoundException("Reservation " + id + " not found for token " + code));
-    }
-
-    @PostMapping("/{code}/reservations/{id}/purchase")
-    public ResponseEntity<EventView> purchase(@PathVariable String code, @PathVariable UUID id,
-            @Valid @RequestBody Commands.Purchase body) {
-        return respond(engine.purchase(code, id, body));
-    }
-
-    @PostMapping("/{code}/reservations/{id}/release")
-    public ResponseEntity<EventView> release(@PathVariable String code, @PathVariable UUID id,
-            @Valid @RequestBody Commands.Release body) {
-        return respond(engine.release(code, id, body));
-    }
-
-    @PostMapping("/{code}/redeem")
-    public ResponseEntity<EventView> redeem(@PathVariable String code, @Valid @RequestBody Commands.Redeem body) {
-        return respond(engine.redeem(code, body));
-    }
-
-    private static ResponseEntity<EventView> respond(WorkflowEngine.Result result) {
-        EventView view = EventView.of(result.event());
-        if (result.duplicate()) {
-            return ResponseEntity.ok().header("Idempotent-Replay", "true").body(view);
+    private String activeRuleSet(TokenDef t) {
+        if (t.ruleSetId() == null) {
+            return t.policyRuleVersion();
         }
-        return ResponseEntity.status(HttpStatus.CREATED).body(view);
+        return registry.activeRuleSet(t.ruleSetId(), clock.instant()).map(v -> v.ruleSetId() + "@" + v.version())
+                .orElse(t.ruleSetId() + " (no version in force)");
+    }
+
+    private static Value value(TokenDef t, TokenLedger.Supply s) {
+        if (t.kind() == Registry.TokenKind.ASSET) {
+            Long owned = t.unitPriceKes() == null ? null : t.unitPriceKes() * s.circulating();
+            return new Value(t.unitPriceKes(), t.valuationKes(), null, owned, null);
+        }
+        Long liability = t.redeemValueKes() == null ? null : t.redeemValueKes() * s.circulating();
+        return new Value(null, null, t.redeemValueKes(), null, liability);
     }
 }

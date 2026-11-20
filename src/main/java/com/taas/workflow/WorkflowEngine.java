@@ -1,289 +1,489 @@
 package com.taas.workflow;
 
-import java.time.Clock;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.Optional;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
-import java.util.function.Supplier;
-import java.util.regex.Pattern;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import com.taas.common.BusinessRuleException;
-import com.taas.common.IdempotencyConflictException;
+import com.taas.common.InvalidRequest;
 import com.taas.common.NotFoundException;
+import com.taas.common.Rejection;
 import com.taas.ledger.Accounts;
 import com.taas.ledger.ActionEvent;
 import com.taas.ledger.ActionLedger;
 import com.taas.ledger.EventType;
-import com.taas.ledger.Hashes;
-import com.taas.ledger.Projector;
 import com.taas.ledger.Registry;
 import com.taas.ledger.Registry.ReservationStatus;
 import com.taas.ledger.Registry.TokenDef;
+import com.taas.ledger.Registry.TokenKind;
 import com.taas.ledger.TokenLedger;
+import com.taas.policy.PolicyDecisionPoint;
+import com.taas.rules.RuleEngine;
+import com.taas.rules.RuleSet;
+import com.taas.workflow.CommandRunner.Caller;
+import com.taas.workflow.CommandRunner.Command;
+
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 /**
- * The Workflow Engine: decides whether an operation is allowed and what event it produces. It never
- * writes a balance. Each operation runs in one transaction that (1) takes the ledger lock, (2) settles
- * idempotency on the txId, (3) checks the rules against current state, (4) appends the event to the
- * Action Ledger and (5) projects it into the Token Ledger. Either all of it commits or none of it does.
+ * The Workflow Engine: decides what is allowed and what is recorded. It never writes a balance and never reads
+ * one to decide: invariants (overdraft, supply ceiling, the ownership cap) are the database's, checked on the
+ * movements this engine records. Each write locks its token row, so writes to one token are serialised while
+ * writes to different tokens proceed in parallel.
+ *
+ * <p>Reservation expiry and payment failure are paths here, not exceptions: each records a compensating event.
  */
 @Service
 public class WorkflowEngine {
 
-    /** Outcome of a command: the event it recorded, and whether this call was a repeat of an earlier one. */
-    public record Result(ActionEvent event, boolean duplicate) {
-    }
+    private static final String TIMER_EXPIRY = "timer:reservation-expiry";
+    private static final String TIMER_INACTIVITY = "timer:loyalty-inactivity";
 
-    private record Decision(EventType type, SortedMap<String, String> payload) {
-    }
-
-    private static final Pattern TOKEN_CODE = Pattern.compile("[A-Z0-9][A-Z0-9_-]{1,31}");
-    private static final int DEFAULT_RESERVATION_MINUTES = 15;
-
-    private final ActionLedger actions;
-    private final TokenLedger tokenLedger;
+    private final CommandRunner runner;
     private final Registry registry;
-    private final Projector projector;
-    private final Clock clock;
+    private final TokenLedger tokenLedger;
+    private final ActionLedger actions;
+    private final PolicyDecisionPoint pdp;
+    private final RuleEngine rules;
+    private final ObjectMapper json;
+    private final String defaultRuleSet;
 
-    public WorkflowEngine(ActionLedger actions, TokenLedger tokenLedger, Registry registry, Projector projector,
-            Clock clock) {
-        this.actions = actions;
-        this.tokenLedger = tokenLedger;
+    public WorkflowEngine(CommandRunner runner, Registry registry, TokenLedger tokenLedger, ActionLedger actions,
+            PolicyDecisionPoint pdp, RuleEngine rules, ObjectMapper json,
+            @Value("${taas.rules.default-loyalty-rule-set}") String defaultRuleSet) {
+        this.runner = runner;
         this.registry = registry;
-        this.projector = projector;
-        this.clock = clock;
+        this.tokenLedger = tokenLedger;
+        this.actions = actions;
+        this.pdp = pdp;
+        this.rules = rules;
+        this.json = json;
+        this.defaultRuleSet = defaultRuleSet;
     }
 
-    @Transactional
-    public Result createToken(Commands.CreateToken c) {
-        String code = c.code().trim().toUpperCase();
-        SortedMap<String, String> request = fields("code", code, "name", c.name(), "kind", c.kind(),
-                "kesPerToken", c.kesPerToken(), "reservationMinutes", c.reservationMinutes(),
-                "maxSupply", c.maxSupply());
-        return run(c.txId(), "create", code, request, () -> {
-            if (!TOKEN_CODE.matcher(code).matches()) {
-                throw new BusinessRuleException("Token code must be 2-32 of A-Z, 0-9, '_' or '-'");
+    // --- Catalogue and supply --------------------------------------------------------------------
+
+    public Reply defineToken(Caller caller, Commands.DefineToken c) {
+        boolean asset = "ASSET".equals(c.kind());
+        if (asset && c.unitPriceKes() == null) {
+            throw new InvalidRequest("An ASSET token needs unitPriceKes");
+        }
+        Command cmd = new Command("define-token", c.tokenId(), null, c);
+        return runner.execute(caller, cmd, null, tx -> {
+            actions.lockChain();   // serialises definitions, so two cannot race to the same id
+            if (registry.token(c.tokenId()).isPresent()) {
+                throw Rejection.conflict("TOKEN_EXISTS", "Token " + c.tokenId() + " is already defined");
             }
-            if (registry.token(code).isPresent()) {
-                throw new BusinessRuleException("Token " + code + " already exists");
-            }
-            Registry.TokenKind kind = parseKind(c.kind());
-            int minutes = c.reservationMinutes() == null ? DEFAULT_RESERVATION_MINUTES : c.reservationMinutes();
-            return new Decision(EventType.TOKEN_CREATED, fields("name", c.name().trim(), "kind", kind.name(),
-                    "kesPerToken", c.kesPerToken(), "reservationMinutes", minutes, "maxSupply", c.maxSupply()));
+            Integer percent = c.maxHolderPercent() != null ? c.maxHolderPercent() : asset ? Integer.valueOf(20) : null;
+            SortedMap<String, String> p = fields(
+                    "name", c.name(), "kind", c.kind(), "assetType", c.assetType(), "backing", c.backing(),
+                    "valuationKes", c.valuationKes(), "unitPriceKes", c.unitPriceKes(),
+                    "redeemValueKes", c.redeemValueKes(), "authorisedSupply", c.authorisedSupply(),
+                    "maxHolderBps", percent == null ? null : percent * 100,
+                    "reservationMinutes", c.reservationMinutes() == null ? 15 : c.reservationMinutes(),
+                    "kycRequired", c.kycRequired() != null ? c.kycRequired() : asset,
+                    "inactivityMonths", asset ? null : c.inactivityMonths(),
+                    "ruleSetId", asset ? null : c.ruleSetId() != null ? c.ruleSetId() : defaultRuleSet,
+                    "policyVersion", "v1");
+            ActionEvent e = tx.record(EventType.TOKEN_DEFINED, c.tokenId(), c.tokenId(),
+                    "policy:" + c.tokenId() + "@v1", p);
+            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "tokenId", c.tokenId()));
         });
     }
 
-    @Transactional
-    public Result issue(String code, Commands.Issue c) {
-        SortedMap<String, String> request = fields("to", c.to(), "amount", c.amount(), "reference", c.reference());
-        return run(c.txId(), "issue", code, request, () -> {
-            TokenDef token = requireToken(code);
-            requireHolder(c.to());
-            requireWithinMaxSupply(token, c.amount());
-            return new Decision(EventType.ISSUED, request);
+    public Reply issue(Caller caller, Commands.Issue c) {
+        TokenDef token = requireToken(c.tokenId());
+        Command cmd = new Command("issue", c.tokenId(), c.tokenId(), c);
+        return runner.execute(caller, cmd, null, tx -> {
+            lock(token.tokenId());
+            ActionEvent e = tx.record(EventType.TOKEN_ISSUED, token.tokenId(), token.tokenId(),
+                    token.policyRuleVersion(), fields("units", c.units(), "reference", c.reference()));
+            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "tokenId", token.tokenId(), "units",
+                    c.units(), "supply", tokenLedger.supply(token.tokenId(), token.authorisedSupply())));
         });
     }
 
-    /** Earn rule: every full {@code kesPerToken} spent earns one token ("spend KES 1,000, earn 1 token"). */
-    @Transactional
-    public Result earn(String code, Commands.Earn c) {
-        SortedMap<String, String> request = fields("account", c.account(), "spendKes", c.spendKes(),
-                "reference", c.reference());
-        return run(c.txId(), "earn", code, request, () -> {
-            TokenDef token = requireToken(code);
-            requireHolder(c.account());
-            if (token.kesPerToken() == null) {
-                throw new BusinessRuleException("Token " + code + " has no earn rule");
+    // --- Rules -----------------------------------------------------------------------------------
+
+    public Reply publishRules(Caller caller, Commands.PublishRules c) {
+        RuleSet ruleSet = parseRuleSet(c.document());
+        Command cmd = new Command("publish-rules", ruleSet.ruleSetId(), null, c);
+        return runner.execute(caller, cmd, null, tx -> {
+            actions.lockChain();
+            if (registry.ruleSetVersion(ruleSet.ruleSetId(), ruleSet.version()).isPresent()) {
+                throw Rejection.conflict("VERSION_EXISTS", ruleSet.ruleSetId() + "@" + ruleSet.version()
+                        + " is already published; rule versions are immutable, publish a new one");
             }
-            long earned = c.spendKes() / token.kesPerToken();
-            if (earned == 0) {
-                throw new BusinessRuleException("Spend of KES " + c.spendKes() + " is below the KES "
-                        + token.kesPerToken() + " needed to earn one token");
-            }
-            requireWithinMaxSupply(token, earned);
-            return new Decision(EventType.EARNED, fields("to", c.account(), "amount", earned,
-                    "spendKes", c.spendKes(), "kesPerToken", token.kesPerToken(), "reference", c.reference()));
+            ActionEvent e = tx.record(EventType.RULE_VERSION_PUBLISHED, ruleSet.ruleSetId(), null,
+                    ruleSet.ruleSetId() + "@" + ruleSet.version(),
+                    fields("version", ruleSet.version(), "effectiveFrom", ruleSet.effectiveFrom(),
+                            "document", json.writeValueAsString(c.document()), "ruleCount", ruleSet.rules().size(),
+                            "description", ruleSet.description()));
+            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "ruleSetId", ruleSet.ruleSetId(),
+                    "version", ruleSet.version(), "effectiveFrom", ruleSet.effectiveFrom(),
+                    "inForceNow", !ruleSet.effectiveFrom().isAfter(tx.now())));
         });
     }
 
-    @Transactional
-    public Result transfer(String code, Commands.Transfer c) {
-        SortedMap<String, String> request = fields("from", c.from(), "to", c.to(), "amount", c.amount(),
-                "reference", c.reference());
-        return run(c.txId(), "transfer", code, request, () -> {
-            requireToken(code);
-            requireHolder(c.from());
-            requireHolder(c.to());
-            if (c.from().equals(c.to())) {
-                throw new BusinessRuleException("Cannot transfer to the same account");
+    /** Parses and checks a rule-set document: structure, expressions, and that its tokens exist. */
+    public RuleSet parseRuleSet(JsonNode document) {
+        List<String> errors = new ArrayList<>();
+        RuleSet ruleSet = RuleSet.parse(document, errors);
+        if (errors.isEmpty()) {
+            errors.addAll(rules.check(ruleSet));
+            for (RuleSet.Rule r : ruleSet.rules()) {
+                TokenDef t = registry.token(r.tokenId()).orElse(null);
+                if (t == null) {
+                    errors.add("rule '" + r.id() + "' awards unknown token " + r.tokenId());
+                } else if (t.kind() != TokenKind.LOYALTY) {
+                    errors.add("rule '" + r.id() + "' awards " + r.tokenId() + ", which is not a loyalty token");
+                }
             }
-            requireFunds(c.from(), code, c.amount());
-            return new Decision(EventType.TRANSFERRED, request);
+        }
+        if (!errors.isEmpty()) {
+            throw new InvalidRequest("The rule set is not valid", errors);
+        }
+        return ruleSet;
+    }
+
+    // --- Loyalty ---------------------------------------------------------------------------------
+
+    /** The client submits a transaction, never an amount: the active rule set decides what is earned. */
+    public Reply award(Caller caller, Commands.Award c) {
+        requireHolder(c.accountId());
+        String ruleSetId = c.ruleSetId() == null ? defaultRuleSet : c.ruleSetId();
+        Command cmd = new Command("award", c.accountId(), null, c);
+        return runner.execute(caller, cmd, null, tx -> {
+            Registry.RuleSetVersion version = registry.activeRuleSet(ruleSetId, tx.now()).orElseThrow(() ->
+                    Rejection.rule("NO_ACTIVE_RULES", "Rule set " + ruleSetId + " has no version in force"));
+            RuleSet ruleSet = RuleSet.parse(json.readTree(version.document()), new ArrayList<>());
+            Commands.Transaction t = c.transaction();
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("type", t.type());
+            event.put("amountKes", t.amountKes());
+            event.put("merchantId", t.merchantId() == null ? "" : t.merchantId());
+            event.put("channel", t.channel() == null ? "" : t.channel());
+            event.put("accountId", c.accountId());
+            RuleEngine.Evaluation result = rules.evaluate(ruleSet, event);
+            String ruleVersion = ruleSetId + "@" + version.version();
+            SortedMap<String, String> base = fields("accountId", c.accountId(), "txnType", t.type(),
+                    "amountKes", t.amountKes(), "merchantId", t.merchantId(), "channel", t.channel(),
+                    "reference", t.reference(), "ruleSetId", ruleSetId, "ruleSetVersion", version.version(),
+                    "matched", result.matchedSummary());
+
+            List<Object> actionIds = new ArrayList<>();
+            if (result.unitsByToken().isEmpty()) {
+                ActionEvent e = tx.record(EventType.AWARD_NOT_QUALIFIED, c.accountId(), null, ruleVersion, base);
+                return Reply.of(200, body("actionId", e.id(), "seq", e.seq(), "awarded", Map.of(),
+                        "ruleSet", ruleVersion, "trace", result.trace(),
+                        "detail", "No rule in " + ruleVersion + " awards units for this transaction"));
+            }
+            List<TokenLedger.Holding> balances = new ArrayList<>();
+            for (String tokenId : new TreeSet<>(result.unitsByToken().keySet())) {
+                TokenDef token = lock(tokenId);
+                SortedMap<String, String> p = new TreeMap<>(base);
+                p.put("units", Long.toString(result.unitsByToken().get(tokenId)));
+                ActionEvent e = tx.record(EventType.TOKEN_EARNED, token.tokenId(), token.tokenId(), ruleVersion, p);
+                actionIds.add(e.id());
+                balances.add(tokenLedger.holding(tokenId, c.accountId()));
+            }
+            return Reply.of(201, body("actionId", actionIds.get(0), "actionIds", actionIds,
+                    "awarded", result.unitsByToken(), "ruleSet", ruleVersion, "trace", result.trace(),
+                    "balance", balances));
         });
     }
 
-    /** Moves the seller's tokens into escrow for the buyer, for the token's reservation window. */
-    @Transactional
-    public Result reserve(String code, Commands.Reserve c) {
-        SortedMap<String, String> request = fields("seller", c.seller(), "buyer", c.buyer(), "amount", c.amount());
-        return run(c.txId(), "reserve", code, request, () -> {
-            TokenDef token = requireToken(code);
-            requireHolder(c.seller());
-            requireHolder(c.buyer());
-            if (c.seller().equals(c.buyer())) {
-                throw new BusinessRuleException("Seller and buyer must differ");
-            }
-            requireFunds(c.seller(), code, c.amount());
-            Instant expiresAt = now().plus(token.reservationMinutes(), ChronoUnit.MINUTES);
-            SortedMap<String, String> payload = new TreeMap<>(request);
-            payload.put("reservationId", UUID.randomUUID().toString());
-            payload.put("expiresAt", expiresAt.toString());
-            return new Decision(EventType.RESERVED, payload);
+    // --- Asset purchase --------------------------------------------------------------------------
+
+    public Reply reserve(Caller caller, Commands.Reserve c) {
+        TokenDef token = requireToken(c.tokenId());
+        requireHolder(c.accountId());
+        if (token.kind() != TokenKind.ASSET) {
+            throw new InvalidRequest(token.tokenId() + " is a loyalty token; only asset tokens are reserved");
+        }
+        Command cmd = new Command("reserve", token.tokenId(), token.tokenId(), c);
+        long bidKes = Math.multiplyExact(c.units(), token.unitPriceKes());
+        Runnable policy = () -> {
+            pdp.requireActingFor(caller, c.accountId());
+            eligibility(token, c.accountId(), bidKes);
+        };
+        return runner.execute(caller, cmd, policy, tx -> {
+            lock(token.tokenId());
+            policy.run();   // re-checked at commit
+            long maxHold = token.reservationMinutes() * 60L;
+            long hold = c.holdSeconds() == null ? maxHold : Math.min(c.holdSeconds(), maxHold);
+            Instant expiresAt = tx.now().plusSeconds(hold);
+            long amountKes = Math.multiplyExact(c.units(), token.unitPriceKes());
+            UUID reservationId = UUID.randomUUID();
+            // The cap and the remaining supply are not checked here: the database refuses the movement.
+            ActionEvent e = tx.record(EventType.TOKEN_RESERVED, token.tokenId(), token.tokenId(),
+                    token.policyRuleVersion(), fields("reservationId", reservationId, "accountId", c.accountId(),
+                            "units", c.units(), "unitPriceKes", token.unitPriceKes(), "amountKes", amountKes,
+                            "expiresAt", expiresAt, "holdSeconds", hold));
+            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "reservationId", reservationId,
+                    "tokenId", token.tokenId(), "accountId", c.accountId(), "units", c.units(),
+                    "amountKes", amountKes, "expiresAt", expiresAt,
+                    "holding", tokenLedger.holding(token.tokenId(), c.accountId())));
         });
     }
 
-    @Transactional
-    public Result purchase(String code, UUID reservationId, Commands.Purchase c) {
-        SortedMap<String, String> request = fields("reservationId", reservationId, "buyer", c.buyer(),
-                "paymentRef", c.paymentRef());
-        return run(c.txId(), "purchase", code, request, () -> {
-            Registry.Reservation r = requireOpenReservation(code, reservationId);
-            if (!r.buyer().equals(c.buyer())) {
-                throw new BusinessRuleException("Reservation " + reservationId + " is held for another buyer");
-            }
-            if (!now().isBefore(r.expiresAt())) {
-                throw new BusinessRuleException("Reservation " + reservationId + " expired at " + r.expiresAt());
-            }
-            return new Decision(EventType.PURCHASED, closing(r, "paymentRef", c.paymentRef()));
+    public Reply release(Caller caller, UUID reservationId) {
+        Registry.Reservation found = requireReservation(reservationId);
+        Command cmd = new Command("release", found.tokenId(), found.tokenId(), Map.of("reservationId", reservationId));
+        return runner.execute(caller, cmd, () -> pdp.requireActingFor(caller, found.accountId()), tx -> {
+            TokenDef token = lock(found.tokenId());
+            Registry.Reservation r = requireReservation(reservationId);
+            requireHeld(r);
+            registry.orderForReservation(reservationId).ifPresent(o -> {
+                if (o.status() == Registry.OrderStatus.AWAITING_PAYMENT) {
+                    throw Rejection.conflict("ORDER_AWAITING_PAYMENT", "Reservation " + reservationId
+                            + " has an order awaiting payment; it is released by payment failure or expiry");
+                }
+            });
+            ActionEvent e = tx.record(EventType.TOKEN_RESERVATION_RELEASED, token.tokenId(), token.tokenId(),
+                    token.policyRuleVersion(), fields("reservationId", reservationId, "accountId", r.accountId(),
+                            "units", r.units(), "reason", "Released by the client"));
+            return Reply.of(200, body("actionId", e.id(), "seq", e.seq(), "reservationId", reservationId,
+                    "status", ReservationStatus.RELEASED));
         });
     }
 
-    @Transactional
-    public Result release(String code, UUID reservationId, Commands.Release c) {
-        return run(c.txId(), "release", code, fields("reservationId", reservationId), () -> {
-            Registry.Reservation r = requireOpenReservation(code, reservationId);
-            return new Decision(EventType.RESERVATION_RELEASED, closing(r, null, null));
+    /** Confirms a reserved bid. Payment is charged downstream of the commit, from the outbox. */
+    public Reply placeOrder(Caller caller, Commands.PlaceOrder c) {
+        Registry.Reservation found = requireReservation(c.reservationId());
+        Command cmd = new Command("order", found.tokenId(), found.tokenId(), c);
+        return runner.execute(caller, cmd, () -> pdp.requireActingFor(caller, found.accountId()), tx -> {
+            TokenDef token = lock(found.tokenId());
+            Registry.Reservation r = requireReservation(c.reservationId());
+            requireHeld(r);
+            if (!tx.now().isBefore(r.expiresAt())) {
+                throw Rejection.conflict("RESERVATION_EXPIRED", "Reservation " + r.reservationId() + " expired at "
+                        + r.expiresAt());
+            }
+            if (registry.orderForReservation(r.reservationId()).isPresent()) {
+                throw Rejection.conflict("ORDER_EXISTS", "Reservation " + r.reservationId() + " already has an order");
+            }
+            UUID orderId = UUID.randomUUID();
+            ActionEvent e = tx.record(EventType.ORDER_PLACED, token.tokenId(), token.tokenId(),
+                    token.policyRuleVersion(), fields("orderId", orderId, "reservationId", r.reservationId(),
+                            "accountId", r.accountId(), "units", r.units(), "amountKes", r.amountKes(),
+                            "paymentMethod", c.paymentMethod() == null ? "MPESA" : c.paymentMethod(),
+                            "simulateOutcome", c.simulateOutcome(), "expiresAt", r.expiresAt()));
+            return Reply.of(202, body("actionId", e.id(), "seq", e.seq(), "orderId", orderId,
+                    "status", Registry.OrderStatus.AWAITING_PAYMENT, "reservationId", r.reservationId(),
+                    "amountKes", r.amountKes(), "expiresAt", r.expiresAt()));
         });
     }
 
-    /** Called by the expiry job. The txId is derived from the reservation, so expiring twice is harmless. */
-    @Transactional
-    public Result expire(UUID reservationId) {
-        Registry.Reservation found = registry.reservation(reservationId)
-                .orElseThrow(() -> new NotFoundException("Reservation " + reservationId + " not found"));
-        return run("expire:" + reservationId, "expire", found.tokenCode(), fields("reservationId", reservationId),
-                () -> {
-                    Registry.Reservation r = requireOpenReservation(found.tokenCode(), reservationId);
-                    if (now().isBefore(r.expiresAt())) {
-                        throw new BusinessRuleException("Reservation " + reservationId + " has not expired yet");
+    /** The PSP's verdict. Keyed by its event id, so a redelivered callback changes nothing. */
+    public Reply paymentCallback(Commands.PaymentCallback c) {
+        Registry.Order found = registry.order(c.orderId())
+                .orElseThrow(() -> new NotFoundException("Order " + c.orderId() + " not found"));
+        Caller caller = new Caller("psp", "psp:" + c.pspEventId());
+        Command cmd = new Command("payment-callback", found.tokenId(), found.tokenId(), c);
+        return runner.execute(caller, cmd, null, tx -> {
+            TokenDef token = lock(found.tokenId());
+            Registry.Order order = registry.order(c.orderId()).orElseThrow();
+            if (order.status() != Registry.OrderStatus.AWAITING_PAYMENT
+                    && order.status() != Registry.OrderStatus.EXPIRED) {
+                throw Rejection.conflict("ORDER_ALREADY_SETTLED", "Order " + order.orderId() + " is already "
+                        + order.status());
+            }
+            Registry.Reservation r = requireReservation(order.reservationId());
+            String policy = token.policyRuleVersion();
+            SortedMap<String, String> base = fields("orderId", order.orderId(), "reservationId", r.reservationId(),
+                    "accountId", order.accountId(), "units", order.units(), "amountKes", order.amountKes(),
+                    "pspEventId", c.pspEventId(), "pspReference", c.pspReference(), "paidKes", c.amountKes());
+            List<Object> recorded = new ArrayList<>();
+
+            if ("FAILED".equals(c.status())) {
+                if (r.status() == ReservationStatus.HELD) {
+                    SortedMap<String, String> p = new TreeMap<>(base);
+                    p.put("reason", c.reason() == null ? "Declined by the payment provider" : c.reason());
+                    recorded.add(tx.record(EventType.PAYMENT_FAILED, token.tokenId(), token.tokenId(), policy, p).id());
+                }
+            } else {
+                recorded.add(tx.record(EventType.PAYMENT_RECEIVED, token.tokenId(), token.tokenId(), policy, base).id());
+                boolean live = r.status() == ReservationStatus.HELD && tx.now().isBefore(r.expiresAt());
+                if (c.amountKes() != order.amountKes()) {
+                    recorded.add(refund(tx, token, base, "AMOUNT_MISMATCH: paid " + c.amountKes() + ", owed "
+                            + order.amountKes()));
+                } else if (live) {
+                    recorded.add(tx.record(EventType.TOKEN_PURCHASED, token.tokenId(), token.tokenId(), policy,
+                            base).id());
+                } else {
+                    if (r.status() == ReservationStatus.HELD) {
+                        // The hold ran out before the payment arrived: the timer wins, whether or not it has run.
+                        recorded.add(tx.record(EventType.TOKEN_RESERVATION_EXPIRED, token.tokenId(), token.tokenId(),
+                                policy, fields("reservationId", r.reservationId(), "accountId", r.accountId(),
+                                        "units", r.units(), "expiresAt", r.expiresAt(), "orderId", order.orderId()))
+                                .id());
                     }
-                    return new Decision(EventType.RESERVATION_EXPIRED, closing(r, null, null));
-                });
+                    recorded.add(refund(tx, token, base, "Payment arrived after the reservation "
+                            + (r.status() == ReservationStatus.HELD ? "expired" : "was " + r.status())));
+                }
+            }
+            Registry.Order now = registry.order(c.orderId()).orElseThrow();
+            return Reply.of(200, body("orderId", now.orderId(), "orderStatus", now.status(), "actionIds", recorded));
+        });
     }
 
-    @Transactional
-    public Result redeem(String code, Commands.Redeem c) {
-        SortedMap<String, String> request = fields("account", c.account(), "amount", c.amount(),
-                "reference", c.reference());
-        return run(c.txId(), "redeem", code, request, () -> {
-            requireToken(code);
-            requireHolder(c.account());
-            requireFunds(c.account(), code, c.amount());
-            return new Decision(EventType.REDEEMED, fields("from", c.account(), "amount", c.amount(),
-                    "reference", c.reference()));
+    private UUID refund(CommandRunner.Tx tx, TokenDef token, SortedMap<String, String> base, String reason) {
+        SortedMap<String, String> p = new TreeMap<>(base);
+        p.put("reason", reason);
+        return tx.record(EventType.PAYMENT_REFUND_REQUIRED, token.tokenId(), token.tokenId(),
+                token.policyRuleVersion(), p).id();
+    }
+
+    /** Timer: returns an unpaid reservation's units once its hold has run out. */
+    public Reply expire(UUID reservationId) {
+        Registry.Reservation found = requireReservation(reservationId);
+        Caller caller = new Caller(TIMER_EXPIRY, "expire:" + reservationId);
+        Command cmd = new Command("expire", found.tokenId(), found.tokenId(), Map.of("reservationId", reservationId));
+        return runner.execute(caller, cmd, null, tx -> {
+            TokenDef token = lock(found.tokenId());
+            Registry.Reservation r = requireReservation(reservationId);
+            if (r.status() != ReservationStatus.HELD) {
+                throw Rejection.conflict("NOTHING_TO_EXPIRE", "Reservation " + reservationId + " is " + r.status());
+            }
+            if (tx.now().isBefore(r.expiresAt())) {
+                throw Rejection.conflict("NOT_YET_DUE", "Reservation " + reservationId + " runs until " + r.expiresAt());
+            }
+            SortedMap<String, String> p = fields("reservationId", reservationId, "accountId", r.accountId(),
+                    "units", r.units(), "expiresAt", r.expiresAt());
+            registry.orderForReservation(reservationId).ifPresent(o -> p.put("orderId", o.orderId().toString()));
+            ActionEvent e = tx.record(EventType.TOKEN_RESERVATION_EXPIRED, token.tokenId(), token.tokenId(),
+                    token.policyRuleVersion(), p);
+            return Reply.of(200, body("actionId", e.id(), "reservationId", reservationId, "status", "EXPIRED"));
+        }, false);
+    }
+
+    // --- Transfers and redemptions ---------------------------------------------------------------
+
+    public Reply transfer(Caller caller, Commands.Transfer c) {
+        TokenDef token = requireToken(c.tokenId());
+        requireHolder(c.fromAccountId());
+        requireHolder(c.toAccountId());
+        if (c.fromAccountId().equals(c.toAccountId())) {
+            throw new InvalidRequest("fromAccountId and toAccountId must differ");
+        }
+        Command cmd = new Command("transfer", token.tokenId(), token.tokenId(), c);
+        long valueKes = token.unitPriceKes() == null ? 0 : Math.multiplyExact(c.units(), token.unitPriceKes());
+        Runnable policy = () -> {
+            pdp.requireActingFor(caller, c.fromAccountId());
+            pdp.requireNotFrozen(c.fromAccountId());
+            eligibility(token, c.toAccountId(), valueKes);
+            pdp.requireWithinVelocity(c.fromAccountId());
+        };
+        return runner.execute(caller, cmd, policy, tx -> {
+            lock(token.tokenId());
+            policy.run();   // re-checked at commit
+            ActionEvent e = tx.record(EventType.TOKEN_TRANSFERRED, token.tokenId(), token.tokenId(),
+                    token.policyRuleVersion(), fields("fromAccountId", c.fromAccountId(), "toAccountId",
+                            c.toAccountId(), "units", c.units(), "reference", c.reference()));
+            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(),
+                    "from", tokenLedger.holding(token.tokenId(), c.fromAccountId()),
+                    "to", tokenLedger.holding(token.tokenId(), c.toAccountId())));
         });
+    }
+
+    public Reply redeem(Caller caller, Commands.Redeem c) {
+        TokenDef token = requireToken(c.tokenId());
+        requireHolder(c.accountId());
+        Command cmd = new Command("redeem", token.tokenId(), token.tokenId(), c);
+        return runner.execute(caller, cmd, () -> pdp.requireActingFor(caller, c.accountId()), tx -> {
+            lock(token.tokenId());
+            Long perUnit = token.kind() == TokenKind.LOYALTY ? token.redeemValueKes() : token.unitPriceKes();
+            long valueKes = perUnit == null ? 0 : Math.multiplyExact(perUnit, c.units());
+            ActionEvent e = tx.record(EventType.TOKEN_REDEEMED, token.tokenId(), token.tokenId(),
+                    token.policyRuleVersion(), fields("accountId", c.accountId(), "units", c.units(),
+                            "merchantId", c.merchantId(), "reference", c.reference(), "valueKes", valueKes));
+            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "valueKes", valueKes,
+                    "holding", tokenLedger.holding(token.tokenId(), c.accountId())));
+        });
+    }
+
+    /**
+     * Timer: lapses a loyalty holder's units after a period with no movement. Reads the holding to know how many
+     * units to revoke; that is safe because the token row lock serialises every write to this token.
+     */
+    public Reply revokeInactive(String tokenId, String accountId, Instant lastActivity) {
+        TokenDef found = requireToken(tokenId);
+        Caller caller = new Caller(TIMER_INACTIVITY, "revoke:" + tokenId + ":" + accountId + ":" + lastActivity);
+        Command cmd = new Command("revoke", tokenId, tokenId, Map.of("accountId", accountId));
+        return runner.execute(caller, cmd, null, tx -> {
+            lock(tokenId);
+            long units = tokenLedger.holding(tokenId, accountId).available();
+            if (units <= 0) {
+                throw Rejection.conflict("NOTHING_TO_REVOKE", accountId + " holds no " + tokenId);
+            }
+            ActionEvent e = tx.record(EventType.TOKEN_REVOKED, tokenId, tokenId, found.policyRuleVersion(),
+                    fields("accountId", accountId, "units", units, "inactiveSince", lastActivity,
+                            "inactivityMonths", found.inactivityMonths(), "reason", "Inactivity"));
+            return Reply.of(200, body("actionId", e.id(), "units", units));
+        }, false);
     }
 
     // ---------------------------------------------------------------------------------------------
 
-    private Result run(String txId, String command, String tokenCode, SortedMap<String, String> request,
-            Supplier<Decision> decide) {
-        actions.lockForWrite();
-        String requestHash = Hashes.sha256(command + "\n" + tokenCode + "\n" + Hashes.canonical(request));
-        Optional<ActionEvent> earlier = actions.findByTxId(txId);
-        if (earlier.isPresent()) {
-            if (!earlier.get().requestHash().equals(requestHash)) {
-                throw new IdempotencyConflictException(txId);
-            }
-            return new Result(earlier.get(), true);
+    private void eligibility(TokenDef token, String accountId, long amountKes) {
+        if (token.kycRequired()) {
+            pdp.requireKyc(accountId, token.tokenId(), amountKes);
+        } else {
+            pdp.requireNotFrozen(accountId);
         }
-        Decision decision = decide.get();
-        ActionEvent event = actions.append(txId, decision.type(), tokenCode, decision.payload(), requestHash, now());
-        projector.apply(event);
-        return new Result(event, false);
     }
 
-    private Instant now() {
-        return clock.instant();
+    private TokenDef requireToken(String tokenId) {
+        return registry.token(tokenId).orElseThrow(() -> new NotFoundException("Token " + tokenId + " not found"));
     }
 
-    private TokenDef requireToken(String code) {
-        return registry.token(code).orElseThrow(() -> new NotFoundException("Token " + code + " not found"));
+    private TokenDef lock(String tokenId) {
+        return registry.lockToken(tokenId).orElseThrow(() -> new NotFoundException("Token " + tokenId + " not found"));
+    }
+
+    private Registry.Reservation requireReservation(UUID id) {
+        return registry.reservation(id).orElseThrow(() -> new NotFoundException("Reservation " + id + " not found"));
+    }
+
+    private static void requireHeld(Registry.Reservation r) {
+        if (r.status() != ReservationStatus.HELD) {
+            throw Rejection.conflict("RESERVATION_" + r.status(), "Reservation " + r.reservationId() + " is "
+                    + r.status().name().toLowerCase().replace('_', ' '));
+        }
     }
 
     private static void requireHolder(String account) {
         if (!Accounts.isHolder(account)) {
-            throw new BusinessRuleException("'" + account + "' is not a valid account id (1-64 of A-Z, a-z, 0-9,"
-                    + " '.', '_' or '-', starting with a letter or digit)");
+            throw new InvalidRequest("'" + account + "' is not a valid account id (1-64 of A-Z, a-z, 0-9, '.', '_'"
+                    + " or '-', starting with a letter or digit)");
         }
     }
 
-    private void requireFunds(String account, String code, long amount) {
-        long available = tokenLedger.balance(account, code);
-        if (available < amount) {
-            throw new BusinessRuleException(account + " has " + available + " " + code + ", needs " + amount);
-        }
-    }
-
-    private void requireWithinMaxSupply(TokenDef token, long amount) {
-        if (token.maxSupply() == null) {
-            return;
-        }
-        long issued = tokenLedger.supply(token.code()).issued();
-        if (issued + amount > token.maxSupply()) {
-            throw new BusinessRuleException("Issuing " + amount + " would exceed the max supply of "
-                    + token.maxSupply() + " (" + issued + " already issued)");
-        }
-    }
-
-    private Registry.Reservation requireOpenReservation(String code, UUID id) {
-        Registry.Reservation r = registry.reservation(id)
-                .filter(found -> found.tokenCode().equals(code))
-                .orElseThrow(() -> new NotFoundException("Reservation " + id + " not found for token " + code));
-        if (r.status() != ReservationStatus.HELD) {
-            throw new BusinessRuleException("Reservation " + id + " is already " + r.status());
-        }
-        return r;
-    }
-
-    private static SortedMap<String, String> closing(Registry.Reservation r, String extraKey, String extraValue) {
-        return fields("reservationId", r.id(), "seller", r.seller(), "buyer", r.buyer(), "amount", r.amount(),
-                extraKey, extraValue);
-    }
-
-    private static Registry.TokenKind parseKind(String kind) {
-        try {
-            return Registry.TokenKind.valueOf(kind.trim().toUpperCase());
-        } catch (IllegalArgumentException e) {
-            throw new BusinessRuleException("Token kind must be LOYALTY or ASSET");
-        }
-    }
-
-    /** Builds a payload from key/value pairs, leaving out null keys and null values. */
-    private static SortedMap<String, String> fields(Object... pairs) {
+    /** A payload from key/value pairs, leaving out nulls. */
+    static SortedMap<String, String> fields(Object... pairs) {
         SortedMap<String, String> out = new TreeMap<>();
         for (int i = 0; i < pairs.length; i += 2) {
-            if (pairs[i] != null && pairs[i + 1] != null) {
+            if (pairs[i + 1] != null) {
                 out.put((String) pairs[i], pairs[i + 1].toString());
             }
+        }
+        return out;
+    }
+
+    private static Map<String, Object> body(Object... pairs) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (int i = 0; i < pairs.length; i += 2) {
+            out.put((String) pairs[i], pairs[i + 1]);
         }
         return out;
     }

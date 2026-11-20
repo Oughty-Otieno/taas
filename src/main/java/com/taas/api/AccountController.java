@@ -1,54 +1,58 @@
 package com.taas.api;
 
 import java.util.List;
-import java.util.Map;
-import java.util.TreeSet;
 
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.taas.ledger.Registry;
 import com.taas.ledger.TokenLedger;
+import com.taas.policy.PolicyDecisionPoint;
 
 @RestController
-@RequestMapping("/api/accounts/{account}")
+@RequestMapping("/v1/accounts")
 public class AccountController {
 
-    /** {@code available} is in the account; {@code reservedForSale} sits in escrow for open reservations. */
-    public record AccountBalance(String token, long available, long reservedForSale) {
+    public record PortfolioLine(String tokenId, String name, String kind, String assetType, long available,
+            long reserved, Long valueKes) {
     }
 
-    public record Statement(String account, String token, List<TokenLedger.StatementLine> lines,
-            long closingBalance) {
+    public record Portfolio(String accountId, String displayName, String kycStatus, List<PortfolioLine> holdings) {
     }
 
     private final TokenLedger tokenLedger;
     private final Registry registry;
+    private final PolicyDecisionPoint pdp;
 
-    public AccountController(TokenLedger tokenLedger, Registry registry) {
+    public AccountController(TokenLedger tokenLedger, Registry registry, PolicyDecisionPoint pdp) {
         this.tokenLedger = tokenLedger;
         this.registry = registry;
+        this.pdp = pdp;
     }
 
-    @GetMapping("/balances")
-    public List<AccountBalance> balances(@PathVariable String account) {
-        Map<String, Long> available = tokenLedger.balancesOf(account);
-        Map<String, Long> reserved = registry.reservedBySeller(account);
-        TreeSet<String> tokens = new TreeSet<>(available.keySet());
-        tokens.addAll(reserved.keySet());
-        return tokens.stream()
-                .map(t -> new AccountBalance(t, available.getOrDefault(t, 0L), reserved.getOrDefault(t, 0L)))
-                .toList();
+    /** Accounts and their KYC state. A customer sees only their own. */
+    @GetMapping
+    public List<PolicyDecisionPoint.Profile> accounts(@AuthenticationPrincipal Jwt jwt) {
+        String bound = Http.boundAccount(jwt);
+        return pdp.profiles().stream().filter(p -> bound == null || bound.equals(p.accountId())).toList();
     }
 
-    /** Every movement on the account with the running balance after it, like a bank statement. */
-    @GetMapping("/statement")
-    public Statement statement(@PathVariable String account, @RequestParam String token) {
-        List<TokenLedger.StatementLine> lines = tokenLedger.statement(account, token);
-        long closing = lines.isEmpty() ? 0 : lines.get(lines.size() - 1).runningBalance();
-        return new Statement(account, token, lines, closing);
+    /** Holdings across loyalty and asset tokens, read from the derived holdings. */
+    @GetMapping("/{accountId}/portfolio")
+    public Portfolio portfolio(@AuthenticationPrincipal Jwt jwt, @PathVariable String accountId) {
+        Http.requireOwn(jwt, accountId);
+        var profile = pdp.profile(accountId);
+        List<PortfolioLine> lines = tokenLedger.portfolio(accountId).stream().map(h -> {
+            Registry.TokenDef t = registry.token(h.tokenId()).orElseThrow();
+            Long perUnit = t.kind() == Registry.TokenKind.ASSET ? t.unitPriceKes() : t.redeemValueKes();
+            return new PortfolioLine(t.tokenId(), t.name(), t.kind().name(), t.assetType(), h.available(),
+                    h.reserved(), perUnit == null ? null : perUnit * h.available());
+        }).toList();
+        return new Portfolio(accountId, profile.map(PolicyDecisionPoint.Profile::displayName).orElse(accountId),
+                profile.map(PolicyDecisionPoint.Profile::kycStatus).orElse("NONE"), lines);
     }
 }
