@@ -7,6 +7,9 @@ spring:
     password: ${TAAS_DB_PASSWORD:taas_pass}
   flyway:
     locations: classpath:db/migration
+  mvc:
+    async:
+      request-timeout: -1
 
 server:
   port: ${TAAS_PORT:8087}
@@ -18,10 +21,37 @@ management:
         include: health
 
 taas:
-  # Comma-separated API keys accepted in the X-API-Key header (the gateway check).
-  # The default is for local development only; set TAAS_API_KEYS anywhere else.
-  api-keys: ${TAAS_API_KEYS:dev-key}
-  # How often the workflow engine looks for reservations whose hold has run out.
-  reservation-expiry-interval-ms: 30000
-  # Enables POST /api/admin/projections/wipe, used by the demo page to show the replay test.
+  # Signing key for access tokens. The default is for local development only.
+  auth:
+    jwt-secret: ${TAAS_JWT_SECRET:dev-only-jwt-secret-change-me-0123456789}
+  # Demo support: /v1/dev/token, /v1/dev/seed, /v1/dev/bid-storm and /v1/ledger/wipe.
   demo-endpoints: ${TAAS_DEMO_ENDPOINTS:true}
+  cors:
+    allowed-origins: ${TAAS_CORS_ORIGINS:http://localhost:3000}
+  rules:
+    default-loyalty-rule-set: loyalty.default
+  policy:
+    max-transfers-per-hour: ${TAAS_MAX_TRANSFERS_PER_HOUR:20}
+  timers:
+    reservation-expiry-interval-ms: 2000
+    loyalty-inactivity-interval-ms: 3600000
+  outbox:
+    poll-interval-ms: 300
+  payments:
+    callback-secret: ${TAAS_PSP_SECRET:dev-only-psp-callback-secret}
+    fake-psp:
+      auto-callback: true
+      callback-delay-ms: 1500
+      callback-url: http://localhost:${server.port}/v1/payments/callback
+  kyc:
+    # Tier 1 (identity verified) may buy up to this much per purchase; tier 2 has no limit.
+    tier1-limit-kes: ${TAAS_KYC_TIER1_LIMIT_KES:100000}
+    callback-secret: ${TAAS_KYC_SECRET:dev-only-kyc-callback-secret}
+    fake-provider:
+      auto-callback: true
+      callback-delay-ms: 2000
+      callback-url: http://localhost:${server.port}/v1/kyc/callback
+  webhooks:
+    # Comma-separated partner URLs; each delivery is signed with X-TaaS-Signature.
+    urls: ${TAAS_WEBHOOK_URLS:}
+    secret: ${TAAS_WEBHOOK_SECRET:dev-only-webhook-secret}

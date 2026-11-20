@@ -1,0 +1,100 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { API, signIn, useSession, useStream } from "@/lib/api";
+
+const LINKS = [
+  { href: "/", label: "Command Centre" },
+  { href: "/operations", label: "Operations" },
+  { href: "/flows", label: "Two Flows, One Platform" },
+  { href: "/customers", label: "Customers & KYC" },
+  { href: "/ledger", label: "Action Ledger" },
+  { href: "/rules", label: "Rule Studio" },
+];
+
+type Persona = { id: string; label: string; description: string; scopes: string[]; boundToAccount: boolean };
+
+export default function Nav() {
+  const path = usePathname();
+  const live = useStream();
+  const session = useSession();
+  const [open, setOpen] = useState(false);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const current = personas.find((p) => p.id === session?.persona);
+
+  useEffect(() => {
+    fetch(`${API}/v1/dev/personas`).then((r) => r.json()).then(setPersonas).catch(() => {});
+  }, []);
+
+  return (
+    <nav className="nav">
+      <div className="brand">
+        <span className="brand-mark">T</span>
+        <span>TaaS</span>
+      </div>
+      <div className="nav-links">
+        {LINKS.map((l) => (
+          <Link key={l.href} href={l.href} className={path === l.href ? "active" : ""}>
+            {l.label}
+          </Link>
+        ))}
+      </div>
+      <span className={`dot ${live ? "dot-on" : ""}`}>{live ? "ledger live" : session && !session.scopes.includes("ledger:read") ? "no ledger access" : "connecting"}</span>
+      <div style={{ position: "relative" }}>
+        <button onClick={() => setOpen((o) => !o)} title={session?.scopes.join(" ")}>
+          {current ? current.label : session?.persona ?? "Signing in…"}
+          {session?.accountId ? ` · ${session.accountId}` : ""} ▾
+        </button>
+        {open && <SignIn personas={personas} onClose={() => setOpen(false)} />}
+      </div>
+    </nav>
+  );
+}
+
+function SignIn({ personas, onClose }: { personas: Persona[]; onClose: () => void }) {
+  const [accounts, setAccounts] = useState<{ accountId: string; displayName: string; kycStatus: string }[]>([]);
+  const [account, setAccount] = useState("john");
+
+  useEffect(() => {
+    // Listing who can sign in is itself a staff read: borrow an auditor's token for it.
+    fetch(`${API}/v1/dev/token`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ persona: "auditor" }) })
+      .then((r) => r.json())
+      .then((t) => fetch(`${API}/v1/accounts`, { headers: { Authorization: `Bearer ${t.access_token}` } }))
+      .then((r) => r.json())
+      .then((a) => setAccounts(a.filter((x: any) => !x.accountId.startsWith("bidder"))))
+      .catch(() => {});
+  }, []);
+
+  return (
+    <div className="signin">
+      <div className="spread" style={{ marginBottom: 6 }}>
+        <b>Sign in as</b>
+        <button className="ghost" onClick={onClose}>✕</button>
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        Each role gets a token with only its scopes. A real deployment signs people in through an identity provider.
+      </div>
+      {personas.filter((p) => !p.boundToAccount).map((p) => (
+        <button key={p.id} className="signin-row" onClick={() => signIn(p.id)}>
+          <b>{p.label}</b>
+          <span className="muted">{p.description}</span>
+          <code className="scopes">{p.scopes.join(" ")}</code>
+        </button>
+      ))}
+      {personas.filter((p) => p.boundToAccount).map((p) => (
+        <div key={p.id} className="signin-row">
+          <b>{p.label}</b>
+          <span className="muted">{p.description}</span>
+          <div className="row" style={{ marginTop: 6 }}>
+            <select value={account} onChange={(e) => setAccount(e.target.value)}>
+              {accounts.map((a) => <option key={a.accountId} value={a.accountId}>{a.displayName} ({a.accountId}, KYC {a.kycStatus.toLowerCase()})</option>)}
+            </select>
+            <button className="primary" onClick={() => signIn(p.id, account)}>Sign in</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

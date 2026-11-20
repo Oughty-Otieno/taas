@@ -2,6 +2,17 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/taas_test
 taas:
-  api-keys: test-key
-  # Effectively off: tests run the expiry job by hand with a controlled clock.
-  reservation-expiry-interval-ms: 3600000
+  policy:
+    max-transfers-per-hour: 3
+  # Effectively off: tests drive timers, the outbox and the PSP callback by hand with a controlled clock.
+  timers:
+    reservation-expiry-interval-ms: 3600000
+    loyalty-inactivity-interval-ms: 3600000
+  outbox:
+    poll-interval-ms: 3600000
+  payments:
+    fake-psp:
+      auto-callback: false
+  kyc:
+    fake-provider:
+      auto-callback: false
