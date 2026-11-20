@@ -17,7 +17,11 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -26,6 +30,8 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import com.taas.staff.StaffService;
 
 /**
  * The gateway check: every call carries {@code Authorization: Bearer <access token>}, the token's signature,
@@ -45,10 +51,23 @@ public class SecurityConfig {
         return new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
     }
 
+    /** Set on a named staff user's token; such a token is honoured only while the user is active in that role. */
+    public static final String STAFF_CLAIM = "staff_user";
+
     @Bean
-    JwtDecoder jwtDecoder(SecretKey jwtKey) {
+    JwtDecoder jwtDecoder(SecretKey jwtKey, StaffService staff) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(jwtKey).macAlgorithm(MacAlgorithm.HS256).build();
-        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefaultWithIssuer(ISSUER)));
+        // Disabling a user, or changing their role, takes effect on their next request, not when the token expires.
+        OAuth2TokenValidator<Jwt> staffStillActive = jwt -> {
+            if (!Boolean.TRUE.equals(jwt.getClaimAsBoolean(STAFF_CLAIM))
+                    || staff.isActiveIn(jwt.getSubject(), jwt.getClaimAsString("persona"))) {
+                return OAuth2TokenValidatorResult.success();
+            }
+            return OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token",
+                    "This user has been disabled or their role has changed; sign in again", null));
+        };
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefaultWithIssuer(ISSUER),
+                staffStillActive));
         return decoder;
     }
 
@@ -70,7 +89,7 @@ public class SecurityConfig {
                     a.requestMatchers(HttpMethod.POST, "/v1/payments/callback", "/v1/kyc/callback").permitAll();
                     if (demo) {
                         a.requestMatchers(HttpMethod.POST, "/v1/dev/token").permitAll();
-                        a.requestMatchers(HttpMethod.GET, "/v1/dev/personas").permitAll();
+                        a.requestMatchers(HttpMethod.GET, "/v1/dev/personas", "/v1/dev/users").permitAll();
                         a.requestMatchers("/v1/dev/**").hasAuthority("SCOPE_ledger:admin");
                     }
                     a.requestMatchers(HttpMethod.GET, "/v1/tokens/**", "/v1/accounts/**").hasAuthority("SCOPE_token:read");
@@ -88,6 +107,11 @@ public class SecurityConfig {
                     a.requestMatchers(HttpMethod.POST, "/v1/customers/*/kyc").hasAuthority("SCOPE_kyc:submit");
                     a.requestMatchers(HttpMethod.POST, "/v1/customers/*/kyc/decision").hasAuthority("SCOPE_kyc:review");
                     a.requestMatchers(HttpMethod.DELETE, "/v1/customers/*/pii").hasAuthority("SCOPE_kyc:review");
+                    a.requestMatchers(HttpMethod.GET, "/v1/businesses", "/v1/businesses/**").hasAuthority("SCOPE_token:read");
+                    a.requestMatchers(HttpMethod.POST, "/v1/businesses", "/v1/tokens/*/issuer")
+                            .hasAuthority("SCOPE_business:manage");
+                    a.requestMatchers(HttpMethod.POST, "/v1/businesses/*/decision").hasAuthority("SCOPE_business:review");
+                    a.requestMatchers("/v1/staff", "/v1/staff/**").hasAuthority("SCOPE_staff:manage");
                     a.requestMatchers(HttpMethod.POST, "/v1/rules/versions").hasAuthority("SCOPE_rules:publish");
                     a.requestMatchers(HttpMethod.GET, "/v1/rules/**").hasAuthority("SCOPE_rules:read");
                     a.requestMatchers(HttpMethod.POST, "/v1/rules/simulate", "/v1/rules/evaluate").hasAuthority("SCOPE_rules:read");

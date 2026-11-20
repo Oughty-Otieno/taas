@@ -1,5 +1,7 @@
 package com.taas.workflow;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.UUID;
 
 import jakarta.validation.Valid;
@@ -37,7 +39,18 @@ public final class Commands {
             @Min(1) @Max(1440) Integer reservationMinutes,
             Boolean kycRequired,
             @Min(1) @Max(120) Integer inactivityMonths,
-            @Size(max = 64) String ruleSetId) {
+            @Size(max = 64) String ruleSetId,
+            // Left out of the request fingerprint when absent, so keys used before issuers existed still match.
+            @JsonInclude(JsonInclude.Include.NON_NULL) @Size(max = 64) String issuerId) {
+
+        public DefineToken(String tokenId, String name, String kind, String assetType, String backing,
+                Long valuationKes, Long unitPriceKes, Long redeemValueKes, Long authorisedSupply,
+                Integer maxHolderPercent, Integer reservationMinutes, Boolean kycRequired, Integer inactivityMonths,
+                String ruleSetId) {
+            this(tokenId, name, kind, assetType, backing, valuationKes, unitPriceKes, redeemValueKes,
+                    authorisedSupply, maxHolderPercent, reservationMinutes, kycRequired, inactivityMonths, ruleSetId,
+                    null);
+        }
     }
 
     public record Issue(@NotBlank String tokenId, @Positive long units, @Size(max = 200) String reference) {

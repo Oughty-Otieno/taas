@@ -31,6 +31,13 @@ function useAccounts() {
   return accounts;
 }
 
+/** Keeps a form's account one this sign-in can see: a customer sees only their own, not the default. */
+function useValidAccount(accounts: any[], account: string, setAccount: (a: string) => void) {
+  useEffect(() => {
+    if (accounts.length && !accounts.some((a) => a.accountId === account)) setAccount(accounts[0].accountId);
+  }, [accounts, account, setAccount]);
+}
+
 export default function Flows() {
   return (
     <>
@@ -54,6 +61,7 @@ export default function Flows() {
 function LoyaltyFlow() {
   const accounts = useAccounts();
   const [account, setAccount] = useState("john");
+  useValidAccount(accounts, account, setAccount);
   const [amount, setAmount] = useState(1200);
   const [last, setLast] = useState<{ key: string; body: any } | null>(null);
   const [res, setRes] = useState<Result | null>(null);
@@ -136,6 +144,7 @@ function AssetFlow() {
   const [assets, setAssets] = useState<any[]>([]);
   const [tokenId, setTokenId] = useState("RWA_APT001");
   const [account, setAccount] = useState("alice");
+  useValidAccount(accounts, account, setAccount);
   const [units, setUnits] = useState(250);
   const [outcome, setOutcome] = useState("SUCCESS");
   const [hold, setHold] = useState(60);

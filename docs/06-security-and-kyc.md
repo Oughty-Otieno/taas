@@ -28,10 +28,10 @@ A **scope** says what kind of thing a caller may do. The console's sign-in menu 
 | Role (persona) | Signs in as | Scopes |
 |---|---|---|
 | Demo operator | `console` | all of them |
-| Platform admin | `admin@taas` | `token:read` `token:issue` `ledger:read` `ledger:admin` `rules:read` `customer:read` `customer:register` |
+| Platform admin | `admin@taas` | `token:read` `token:issue` `ledger:read` `ledger:admin` `rules:read` `customer:read` `customer:register` `business:manage` `staff:manage` |
 | Rules manager | `rules-manager@taas` | `token:read` `rules:read` `rules:publish` `ledger:read` |
 | Operations | `operations@taas` | `token:read` `token:award` `token:trade` `token:transfer` `token:redeem` `ledger:read` `rules:read` `customer:read` `customer:register` `kyc:submit` |
-| Compliance officer | `compliance@taas` | `token:read` `ledger:read` `customer:read` `kyc:review` |
+| Compliance officer | `compliance@taas` | `token:read` `ledger:read` `customer:read` `kyc:review` `business:review` |
 | Auditor | `auditor@taas` | `token:read` `ledger:read` `rules:read` `customer:read` |
 | Customer | `customer:<accountId>` | `token:read` `token:trade` `token:transfer` `token:redeem` `kyc:submit`, **bound to one account** |
 
@@ -51,9 +51,61 @@ A **scope** says what kind of thing a caller may do. The console's sign-in menu 
 | `customer:register` | register a customer |
 | `kyc:submit` | submit a customer for KYC (a customer: only themselves) |
 | `kyc:review` | decide referred cases, revoke (freeze), erase personal data |
+| `business:manage` | register businesses, name a token's issuer |
+| `business:review` | verify, suspend or reinstate a business |
+| `staff:manage` | add staff users, change their role, disable or re-enable them |
 
 A missing or invalid token is a `401`; a token without the route's scope is a `403`. Any route not listed in
 `SecurityConfig` is denied.
+
+## Staff users
+
+Staff sign in as **named users**, each holding one role. The console's sign-in menu lists the active users; the
+migration creates one per role (Amina Yusuf, admin; Brian Odhiambo, rules manager; Faith Chebet, operations; David
+Mwangi, compliance; Lucy Atieno, auditor). A user's token carries their user id as its subject, so every event they
+cause names them as its actor.
+
+An admin manages users on the **Staff** page (`/v1/staff`, scope `staff:manage`):
+
+| Action | Event | Guards |
+|---|---|---|
+| Add a user (name, optional work email, role) | `STAFF_USER_CREATED` | `USER_EXISTS` |
+| Change their role | `STAFF_ROLE_CHANGED` | `NO_CHANGE` |
+| Disable (reason required) or re-enable | `STAFF_USER_DISABLED` / `STAFF_USER_ENABLED` | `NO_CHANGE` |
+
+- **Nobody changes their own role or status** (`403 CANNOT_CHANGE_SELF`), and **the last active admin cannot be
+  demoted or disabled** (`409 LAST_ADMIN`).
+- **Disabling or re-roling takes effect at once.** A staff token is honoured only while its user is active in the role
+  it was issued for; the gateway checks this on every request, so a disabled user's next call gets a `401`.
+- The email address stays in the `staff_user` table; it never enters the ledger.
+- The role personas (`admin@taas` and so on) still work through the API for scripts and tests, without a named user.
+
+In the demo anyone may sign in as any active user. A real deployment puts an identity provider (passwords, MFA,
+single sign-on) in front; the users, roles and ledger records stay the same.
+
+## Businesses
+
+A business is the company behind a token. The lifecycle has two people in it on purpose:
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: admin registers (BUSINESS_REGISTERED)
+    PENDING --> VERIFIED: a different officer verifies (BUSINESS_VERIFIED)
+    VERIFIED --> SUSPENDED: compliance suspends, with a reason (BUSINESS_SUSPENDED)
+    SUSPENDED --> VERIFIED: compliance reinstates (BUSINESS_VERIFIED)
+```
+
+| Rule | Refusal |
+|---|---|
+| The person who registered a business cannot verify it (four eyes) | `403 FOUR_EYES` |
+| Registration numbers are unique | `409 REGISTRATION_EXISTS` |
+| Assets can be defined under a business only once it is verified (`issuerId` on `POST /v1/tokens`) | `422 ISSUER_NOT_VERIFIED` |
+| A suspended business cannot issue new supply or sell new units (reservations) | `403 ISSUER_SUSPENDED` |
+| A suspension does not touch holders: they keep their units and may transfer and redeem | (none) |
+| A token defined without an issuer can be given one, once (`POST /v1/tokens/{id}/issuer`) | `409 ISSUER_ALREADY_SET` |
+
+Only public company data is recorded (name, registration number, sector, payout account, description), so all of it may
+appear in the ledger. The business directory is a projection, rebuilt by replay.
 
 ## Account binding
 

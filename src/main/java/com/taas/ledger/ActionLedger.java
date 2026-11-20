@@ -152,6 +152,18 @@ public class ActionLedger {
         return jdbc.query(sql.toString(), rowMapper, args.toArray());
     }
 
+    /**
+     * Events about one subject (a business, a staff user), newest first. For a business this includes the tokens
+     * listed under it, which name it as their issuer.
+     */
+    public List<ActionEvent> concerning(String subjectId, int limit) {
+        return jdbc.query("""
+                SELECT * FROM action_event
+                WHERE subject_id = ?
+                   OR (event_type IN ('TOKEN_DEFINED', 'TOKEN_ISSUER_ASSIGNED') AND payload->>'issuerId' = ?)
+                ORDER BY seq DESC LIMIT ?""", rowMapper, subjectId, subjectId, limit);
+    }
+
     /** Streams every event in sequence order without loading the whole history into memory. */
     public void forEachInOrder(Consumer<ActionEvent> consumer) {
         jdbc.query(con -> {

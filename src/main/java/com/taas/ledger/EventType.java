@@ -28,6 +28,14 @@ public enum EventType {
     KYC_REJECTED(Outcome.FAILED),
     KYC_REVOKED(Outcome.REVERSED),
     PII_ERASED(Outcome.OK),
+    BUSINESS_REGISTERED(Outcome.OK),
+    BUSINESS_VERIFIED(Outcome.OK),
+    BUSINESS_SUSPENDED(Outcome.REVERSED),
+    TOKEN_ISSUER_ASSIGNED(Outcome.OK),
+    STAFF_USER_CREATED(Outcome.OK),
+    STAFF_ROLE_CHANGED(Outcome.OK),
+    STAFF_USER_DISABLED(Outcome.REVERSED),
+    STAFF_USER_ENABLED(Outcome.OK),
     REQUEST_REJECTED(Outcome.FAILED);
 
     /** How a screen should present the event: failures and reversals are shown differently from successes. */

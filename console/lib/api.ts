@@ -23,17 +23,19 @@ export type Action = {
 
 export type Result<T = any> = { status: number; body: T; replayed: boolean; key?: string };
 
-export type Session = { persona: string; accountId: string | null; subject: string; scopes: string[] };
+export type Session = { persona: string; accountId: string | null; subject: string; scopes: string[]; name: string | null; userId: string | null };
 
 const SESSION_KEY = "taas.signin";
 let tokenPromise: Promise<string> | null = null;
 let session: Session | null = null;
 const sessionListeners = new Set<(s: Session | null) => void>();
 
-function stored(): { persona: string; accountId?: string | null } {
+type SignIn = { persona: string; accountId?: string | null; userId?: string | null };
+
+function stored(): SignIn {
   try {
     const v = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "null");
-    if (v?.persona) return v;
+    if (v?.persona || v?.userId) return v;
   } catch {
     // private window or blocked storage: fall back to the demo operator
   }
@@ -44,9 +46,9 @@ function stored(): { persona: string; accountId?: string | null } {
  * Signs in as a role. The identity provider here is the dev token endpoint: it issues a token carrying only the
  * role's scopes and, for a customer, the one account they may act for. The whole console reloads under it.
  */
-export function signIn(persona: string, accountId?: string | null) {
+export function signIn(persona: string, accountId?: string | null, userId?: string | null) {
   try {
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ persona, accountId: accountId ?? null }));
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ persona, accountId: accountId ?? null, userId: userId ?? null }));
   } catch {
     // ignore: the sign-in then lasts for this page load only
   }
@@ -63,12 +65,13 @@ export function accessToken(): Promise<string> {
     tokenPromise = fetch(`${API}/v1/dev/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persona: want.persona, accountId: want.accountId ?? undefined }),
+      // A named staff user signs in as themselves; otherwise as a role (the demo operator, or a customer).
+      body: JSON.stringify(want.userId ? { userId: want.userId } : { persona: want.persona, accountId: want.accountId ?? undefined }),
     })
       .then(async (r) => {
         if (!r.ok) {
           // A stale sign-in (say, an account that no longer exists): fall back to the demo operator.
-          if (want.persona !== "demo") {
+          if (want.persona !== "demo" || want.userId) {
             try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
           }
           throw new Error(`sign-in failed (${r.status})`);
@@ -76,7 +79,8 @@ export function accessToken(): Promise<string> {
         return r.json();
       })
       .then((j) => {
-        session = { persona: j.persona, accountId: j.accountId ?? null, subject: j.subject, scopes: String(j.scope).split(" ") };
+        session = { persona: j.persona, accountId: j.accountId ?? null, subject: j.subject, scopes: String(j.scope).split(" "),
+          name: j.name ?? null, userId: j.userId ?? null };
         sessionListeners.forEach((l) => l(session));
         return j.access_token as string;
       })
@@ -122,6 +126,11 @@ export async function call<T = any>(
     headers,
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
+  if (res.status === 401 && stored().userId) {
+    // The user was disabled or their role changed: sign in again on the next call (a disabled user falls back
+    // to the demo operator, because the sign-in itself is refused).
+    tokenPromise = null;
+  }
   const text = await res.text();
   let body: any = null;
   try {
@@ -154,22 +163,40 @@ function setConnected(v: boolean) {
   statusListeners.forEach((l) => l(v));
 }
 
-async function ensureStream() {
-  if (source || typeof window === "undefined") return;
+let starting: Promise<void> | null = null;
+
+/**
+ * Opens the one live stream this tab shares. Every useStream on a page calls this at mount, all before the access
+ * token has arrived, so concurrent callers share one pending start: without that each opened its own EventSource,
+ * and a few tabs used up the browser's six connections per host, leaving ordinary requests queued forever.
+ */
+function ensureStream(): Promise<void> {
+  if (source || typeof window === "undefined") return Promise.resolve();
+  if (!starting) {
+    starting = openStream().finally(() => {
+      starting = null;
+    });
+  }
+  return starting;
+}
+
+async function openStream() {
   const token = await accessToken();
+  if (source) return;
   if (!session?.scopes.includes("ledger:read")) return;   // this sign-in may not watch the ledger
   // EventSource cannot set headers; the stream accepts the token as a query parameter.
-  source = new EventSource(`${API}/v1/ledger/stream?access_token=${encodeURIComponent(token)}`);
-  source.addEventListener("hello", () => setConnected(true));
-  source.addEventListener("action", (e) => {
+  const es = new EventSource(`${API}/v1/ledger/stream?access_token=${encodeURIComponent(token)}`);
+  source = es;
+  es.addEventListener("hello", () => setConnected(true));
+  es.addEventListener("action", (e) => {
     const a = JSON.parse((e as MessageEvent).data) as Action;
     listeners.forEach((l) => l(a));
   });
-  source.onerror = () => {
+  es.onerror = () => {
     setConnected(false);
-    source?.close();
-    source = null;
-    setTimeout(ensureStream, 2000);
+    es.close();
+    if (source === es) source = null;
+    setTimeout(() => ensureStream().catch(() => {}), 2000);
   };
 }
 

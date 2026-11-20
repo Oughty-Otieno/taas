@@ -27,11 +27,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.taas.business.BusinessService;
 import com.taas.common.InvalidRequest;
 import com.taas.common.NotFoundException;
 import com.taas.ledger.Projector;
 import com.taas.ledger.Registry;
 import com.taas.ledger.TokenLedger;
+import com.taas.staff.StaffService;
 import com.taas.workflow.CommandRunner.Caller;
 import com.taas.workflow.Commands;
 import com.taas.workflow.Reply;
@@ -52,7 +54,8 @@ public class DevController {
 
     public static final Set<String> ALL_SCOPES = Set.of("token:read", "token:issue", "token:award", "token:trade",
             "token:transfer", "token:redeem", "ledger:read", "ledger:admin", "rules:read", "rules:publish",
-            "customer:read", "customer:register", "kyc:submit", "kyc:review");
+            "customer:read", "customer:register", "kyc:submit", "kyc:review", "business:manage", "business:review",
+            "staff:manage");
 
     /** A role someone signs in as. Scopes are what the gateway checks; customers are also bound to one account. */
     public record Persona(String id, String label, String description, List<String> scopes, boolean boundToAccount) {
@@ -63,21 +66,21 @@ public class DevController {
                     false),
             new Persona("admin", "Platform admin", "Defines tokens, issues supply, runs replay and verification",
                     List.of("token:read", "token:issue", "ledger:read", "ledger:admin", "rules:read", "customer:read",
-                            "customer:register"), false),
+                            "customer:register", "business:manage", "staff:manage"), false),
             new Persona("rules-manager", "Rules manager", "Drafts, simulates and publishes rule versions",
                     List.of("token:read", "rules:read", "rules:publish", "ledger:read"), false),
             new Persona("operations", "Operations", "Serves customers: onboarding, awards, trades, transfers",
                     List.of("token:read", "token:award", "token:trade", "token:transfer", "token:redeem", "ledger:read",
                             "rules:read", "customer:read", "customer:register", "kyc:submit"), false),
             new Persona("compliance", "Compliance officer", "Decides referred KYC cases, revokes, erases personal data",
-                    List.of("token:read", "ledger:read", "customer:read", "kyc:review"), false),
+                    List.of("token:read", "ledger:read", "customer:read", "kyc:review", "business:review"), false),
             new Persona("auditor", "Auditor", "Read-only: ledger, proofs, rules, customers",
                     List.of("token:read", "ledger:read", "rules:read", "customer:read"), false),
             new Persona("customer", "Customer", "A token holder: their own portfolio, purchases and KYC only",
                     List.of("token:read", "token:trade", "token:transfer", "token:redeem", "kyc:submit"), true));
 
     public record TokenRequest(@Pattern(regexp = "[a-z0-9][a-z0-9._-]{0,63}") String clientId,
-            @Size(max = 20) List<String> scopes, String persona, String accountId) {
+            @Size(max = 20) List<String> scopes, String persona, String accountId, String userId) {
     }
 
     public record StormRequest(String tokenId, @Min(1) @Max(1000) Integer bids, @Min(1) @Max(20) Integer buyers,
@@ -100,10 +103,15 @@ public class DevController {
     private final Projector projector;
     private final ObjectMapper json;
     private final com.taas.policy.PolicyDecisionPoint pdp;
+    private final StaffService staff;
+    private final BusinessService businesses;
 
     public DevController(JwtIssuer issuer, WorkflowEngine engine, Registry registry, TokenLedger tokenLedger,
-            Projector projector, ObjectMapper json, com.taas.policy.PolicyDecisionPoint pdp) {
+            Projector projector, ObjectMapper json, com.taas.policy.PolicyDecisionPoint pdp, StaffService staff,
+            BusinessService businesses) {
         this.pdp = pdp;
+        this.staff = staff;
+        this.businesses = businesses;
         this.issuer = issuer;
         this.engine = engine;
         this.registry = registry;
@@ -117,12 +125,53 @@ public class DevController {
         return PERSONAS;
     }
 
+    /** A staff user someone can sign in as: who they are and the role they hold. */
+    public record SignInUser(String userId, String displayName, String role, String roleLabel) {
+    }
+
+    /** The active staff users, for the sign-in menu. */
+    @GetMapping("/users")
+    public List<SignInUser> users() {
+        return staff.users().stream().filter(u -> "ACTIVE".equals(u.status()))
+                .map(u -> new SignInUser(u.userId(), u.displayName(), u.role(), persona(u.role()).label())).toList();
+    }
+
+    private static Persona persona(String id) {
+        return PERSONAS.stream().filter(x -> x.id().equals(id)).findFirst()
+                .orElseThrow(() -> new InvalidRequest("Unknown persona " + id));
+    }
+
     /**
      * Stands in for the identity provider. With {@code persona}, signs in as that role (a customer also names
      * their account); otherwise issues client-credentials style tokens for {@code clientId} with {@code scopes}.
      */
     @PostMapping("/token")
     public Map<String, Object> token(@Valid @RequestBody TokenRequest body) {
+        if (body.userId() != null) {
+            // A named staff user: their role's scopes, their own id as the subject, so the ledger names them.
+            StaffService.StaffUser u = staff.user(body.userId())
+                    .orElseThrow(() -> new InvalidRequest("No staff user " + body.userId()));
+            if (!"ACTIVE".equals(u.status())) {
+                throw new InvalidRequest(u.displayName() + " is disabled and cannot sign in");
+            }
+            Persona p = persona(u.role());
+            Duration ttl = Duration.ofHours(12);
+            Map<String, Object> claims = new LinkedHashMap<>();
+            claims.put("persona", p.id());
+            claims.put("name", u.displayName());
+            claims.put(SecurityConfig.STAFF_CLAIM, true);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("access_token", issuer.issue(u.userId(), p.scopes(), ttl, claims));
+            out.put("token_type", "Bearer");
+            out.put("expires_in", ttl.toSeconds());
+            out.put("scope", String.join(" ", p.scopes()));
+            out.put("subject", u.userId());
+            out.put("persona", p.id());
+            out.put("name", u.displayName());
+            out.put("userId", u.userId());
+            out.put("accountId", null);
+            return out;
+        }
         if (body.persona() != null) {
             Persona p = PERSONAS.stream().filter(x -> x.id().equals(body.persona())).findFirst()
                     .orElseThrow(() -> new InvalidRequest("Unknown persona " + body.persona()));
@@ -246,6 +295,27 @@ public class DevController {
                 c("seed-res-mary"), new Commands.Reserve("RWA_TWR014", "mary", 300, 60)));
         step(steps, "Grace reserves 2,500 RWA_TWR014 (above the 20% cap: rejected)", () -> engine.reserve(
                 c("seed-res-grace"), new Commands.Reserve("RWA_TWR014", "grace", 2_500, null)));
+
+        // The businesses behind the tokens: registered by an admin, verified by a different (compliance) officer,
+        // then named as each token's issuer.
+        String[][] issuers = {
+            {"m-rewards", "M-Rewards Ltd", "PVT-2018-04412", "Loyalty programme", "Paybill 400200",
+                "Runs the M-Rewards points programme with partner merchants", "LOYALTY_MPR"},
+            {"riverside-properties", "Riverside Properties Ltd", "PVT-2016-11873", "Real estate", "Paybill 522011",
+                "Owns and manages residential apartments in Kilimani, Nairobi", "RWA_APT001"},
+            {"nakuru-towers", "Nakuru Towers Ltd", "PVT-2020-03390", "Telecom infrastructure", "Paybill 600812",
+                "Builds rooftop towers and leases space to mobile operators", "RWA_TWR014"},
+            {"muranga-avocado", "Murang'a Avocado Growers Co-operative", "CS-2015-0771", "Agriculture",
+                "Paybill 247109", "Grows export avocados under an offtake contract", "RWA_FARM07"}};
+        for (String[] b : issuers) {
+            step(steps, "Register " + b[1], () -> businesses.register(new Caller("seed-admin", "seed-biz-" + b[0]),
+                    new BusinessService.Register(b[0], b[1], b[2], b[3], b[4], b[5])));
+            step(steps, "Verify " + b[1] + " (a second officer)", () -> businesses.decide(
+                    new Caller("seed-compliance", "seed-biz-verify-" + b[0]),
+                    b[0], new BusinessService.Decision("VERIFY", "Certificate of incorporation and directors checked")));
+            step(steps, b[1] + " is the issuer of " + b[6], () -> businesses.assignIssuer(
+                    new Caller("seed-admin", "seed-biz-assign-" + b[0]), b[6], new BusinessService.AssignIssuer(b[0])));
+        }
         return steps;
     }
 

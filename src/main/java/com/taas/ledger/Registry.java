@@ -28,6 +28,14 @@ public class Registry {
 
     public enum OrderStatus { AWAITING_PAYMENT, PAID, PAYMENT_FAILED, EXPIRED, REFUND_REQUIRED }
 
+    public enum BusinessStatus { PENDING, VERIFIED, SUSPENDED }
+
+    /** A business: the issuer of an asset or the operator of a loyalty programme. Public company data only. */
+    public record Business(String businessId, String name, String registrationNo, String sector,
+            String payoutAccount, String description, BusinessStatus status, String statusReason,
+            String registeredBy, Instant registeredAt) {
+    }
+
     public record TokenDef(String tokenId, String name, TokenKind kind, String assetType, String backing,
             Long valuationKes, Long unitPriceKes, Long redeemValueKes, long authorisedSupply, Integer maxHolderBps,
             int reservationMinutes, boolean kycRequired, Integer inactivityMonths, String ruleSetId,
@@ -83,13 +91,76 @@ public class Registry {
                 INSERT INTO token (token_id, name, kind, asset_type, backing, valuation_kes, unit_price_kes,
                                    redeem_value_kes, authorised_supply, max_holder_bps, reservation_minutes,
                                    kyc_required, inactivity_months, rule_set_id, policy_version, defined_seq,
-                                   defined_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   defined_at, issuer_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 e.tokenId(), e.get("name"), e.get("kind"), e.opt("assetType"), e.opt("backing"),
                 optLong(e, "valuationKes"), optLong(e, "unitPriceKes"), optLong(e, "redeemValueKes"),
                 e.getLong("authorisedSupply"), optInt(e, "maxHolderBps"), Integer.parseInt(e.get("reservationMinutes")),
                 Boolean.parseBoolean(e.get("kycRequired")), optInt(e, "inactivityMonths"), e.opt("ruleSetId"),
-                e.get("policyVersion"), e.seq(), utc(e.occurredAt()));
+                e.get("policyVersion"), e.seq(), utc(e.occurredAt()), e.opt("issuerId"));
+    }
+
+    /** The business that issued a token, if it has one. */
+    public Optional<Business> issuerOf(String tokenId) {
+        return jdbc.query("SELECT b.* FROM business b JOIN token t ON t.issuer_id = b.business_id WHERE t.token_id = ?",
+                this::mapBusiness, tokenId).stream().findFirst();
+    }
+
+    void assignIssuer(ActionEvent e) {
+        jdbc.update("UPDATE token SET issuer_id = ? WHERE token_id = ?", e.get("issuerId"), e.tokenId());
+    }
+
+    // --- Businesses ------------------------------------------------------------------------------
+
+    public List<Business> businesses() {
+        return jdbc.query("SELECT * FROM business ORDER BY name", this::mapBusiness);
+    }
+
+    public Optional<Business> business(String businessId) {
+        return jdbc.query("SELECT * FROM business WHERE business_id = ?", this::mapBusiness, businessId).stream()
+                .findFirst();
+    }
+
+    /** Locks the business row until the transaction ends, so decisions on one business are serialised. */
+    public Optional<Business> lockBusiness(String businessId) {
+        return jdbc.query("SELECT * FROM business WHERE business_id = ? FOR UPDATE", this::mapBusiness, businessId)
+                .stream().findFirst();
+    }
+
+    public boolean registrationNoTaken(String registrationNo) {
+        Integer n = jdbc.queryForObject("SELECT count(*) FROM business WHERE lower(registration_no) = lower(?)",
+                Integer.class, registrationNo);
+        return n != null && n > 0;
+    }
+
+    /** Token ids issued by each business. */
+    public Map<String, List<String>> tokensByIssuer() {
+        Map<String, List<String>> out = new TreeMap<>();
+        jdbc.query("SELECT issuer_id, token_id FROM token WHERE issuer_id IS NOT NULL ORDER BY token_id",
+                (RowCallbackHandler) rs -> out.computeIfAbsent(rs.getString(1), k -> new java.util.ArrayList<>())
+                        .add(rs.getString(2)));
+        return out;
+    }
+
+    void insertBusiness(ActionEvent e) {
+        jdbc.update("""
+                INSERT INTO business (business_id, name, registration_no, sector, payout_account, description, status,
+                                      registered_by, registered_seq, registered_at, updated_seq)
+                VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)""",
+                e.subjectId(), e.get("name"), e.get("registrationNo"), e.opt("sector"), e.opt("payoutAccount"),
+                e.opt("description"), e.actorId(), e.seq(), utc(e.occurredAt()), e.seq());
+    }
+
+    void updateBusinessStatus(ActionEvent e, BusinessStatus status) {
+        jdbc.update("UPDATE business SET status = ?, status_reason = ?, updated_seq = ? WHERE business_id = ?",
+                status.name(), e.opt("reason"), e.seq(), e.subjectId());
+    }
+
+    private Business mapBusiness(ResultSet rs, int i) throws SQLException {
+        return new Business(rs.getString("business_id"), rs.getString("name"), rs.getString("registration_no"),
+                rs.getString("sector"), rs.getString("payout_account"), rs.getString("description"),
+                BusinessStatus.valueOf(rs.getString("status")), rs.getString("status_reason"),
+                rs.getString("registered_by"), rs.getObject("registered_at", OffsetDateTime.class).toInstant());
     }
 
     // --- Reservations ----------------------------------------------------------------------------
@@ -204,8 +275,11 @@ public class Registry {
                 (RowCallbackHandler) rs -> out.put("order:" + rs.getString(1), rs.getString(2)));
         jdbc.query("SELECT rule_set_id, version FROM rule_set_version",
                 (RowCallbackHandler) rs -> out.put("rules:" + rs.getString(1) + "@" + rs.getString(2), "published"));
-        jdbc.query("SELECT token_id, policy_version FROM token",
-                (RowCallbackHandler) rs -> out.put("token:" + rs.getString(1), rs.getString(2)));
+        jdbc.query("SELECT token_id, policy_version, coalesce(issuer_id, '-') FROM token",
+                (RowCallbackHandler) rs -> out.put("token:" + rs.getString(1), rs.getString(2) + " issuer "
+                        + rs.getString(3)));
+        jdbc.query("SELECT business_id, status FROM business",
+                (RowCallbackHandler) rs -> out.put("business:" + rs.getString(1), rs.getString(2)));
         return out;
     }
 

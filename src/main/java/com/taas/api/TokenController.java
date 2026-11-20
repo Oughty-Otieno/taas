@@ -38,11 +38,11 @@ public class TokenController {
     }
 
     public record TokenSummary(TokenDef token, Long capUnits, TokenLedger.Supply supply, Value value,
-            String activeRuleSet) {
+            String activeRuleSet, Registry.Business issuer) {
     }
 
     public record TokenDetail(TokenDef token, Long capUnits, TokenLedger.Supply supply, Value value,
-            String activeRuleSet, List<Holder> holders, List<ActionView> recent) {
+            String activeRuleSet, Registry.Business issuer, List<Holder> holders, List<ActionView> recent) {
     }
 
     private final Registry registry;
@@ -64,7 +64,8 @@ public class TokenController {
     public List<TokenSummary> list() {
         return registry.tokens().stream().map(t -> {
             TokenLedger.Supply s = tokenLedger.supply(t.tokenId(), t.authorisedSupply());
-            return new TokenSummary(t, t.capUnits(), s, value(t, s), activeRuleSet(t));
+            return new TokenSummary(t, t.capUnits(), s, value(t, s), activeRuleSet(t),
+                    registry.issuerOf(t.tokenId()).orElse(null));
         }).toList();
     }
 
@@ -80,7 +81,8 @@ public class TokenController {
                 .toList();
         ActionLedger.Filter f = new ActionLedger.Filter(tokenId, null, null, null, List.of(), null, null, null);
         List<ActionView> recent = actions.list(f, null, 15, true).stream().map(ActionView::of).toList();
-        return new TokenDetail(t, t.capUnits(), s, value(t, s), activeRuleSet(t), holders, recent);
+        return new TokenDetail(t, t.capUnits(), s, value(t, s), activeRuleSet(t),
+                registry.issuerOf(tokenId).orElse(null), holders, recent);
     }
 
     @PostMapping("/tokens")

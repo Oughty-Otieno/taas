@@ -81,7 +81,19 @@ function TokenSelect({ tokens, value, onChange }: { tokens: Token[]; value: stri
   );
 }
 
-function AccountSelect({ label, accounts, value, onChange }: { label: string; accounts: Account[]; value: string; onChange: (v: string) => void }) {
+/**
+ * Picks an account from those this sign-in may see. A customer sees only their own, so a default such as "alice"
+ * is replaced by the first account listed: the form must send what the menu shows. With {@code free}, a customer
+ * (who cannot list other people's accounts) types the account instead, as for the receiver of a transfer.
+ */
+function AccountSelect({ label, accounts, value, onChange, free = false }: { label: string; accounts: Account[]; value: string; onChange: (v: string) => void; free?: boolean }) {
+  const typed = free && accounts.length <= 1;
+  useEffect(() => {
+    if (!typed && accounts.length && !accounts.some((a) => a.accountId === value)) onChange(accounts[0].accountId);
+  }, [accounts, value, onChange, typed]);
+  if (typed) {
+    return <label className="field">{label}<input value={value} onChange={(e) => onChange(e.target.value.trim())} placeholder="account id, e.g. alice" style={{ width: 150 }} /></label>;
+  }
   return (
     <label className="field">{label}
       <select value={value} onChange={(e) => onChange(e.target.value)}>
@@ -143,7 +155,7 @@ function Transfer({ tokens, accounts, send }: { tokens: Token[]; accounts: Accou
       <div className="row">
         <TokenSelect tokens={tokens} value={tokenId} onChange={setTokenId} />
         <AccountSelect label="From" accounts={accounts} value={from} onChange={setFrom} />
-        <AccountSelect label="To" accounts={accounts} value={to} onChange={setTo} />
+        <AccountSelect label="To" accounts={accounts} value={to} onChange={setTo} free />
         <Units value={units} onChange={setUnits} />
         <button className="primary" style={{ alignSelf: "flex-end" }} disabled={!tokenId}
           onClick={() => send("Transfer", "/v1/transfers", { tokenId, fromAccountId: from, toAccountId: to, units, reference: "Console transfer" })}>Transfer</button>

@@ -46,6 +46,9 @@ public class Projector {
 
     /** Projects one event. Returns how many movements it wrote. */
     public int apply(ActionEvent event) {
+        if (event.type() == EventType.BUSINESS_REGISTERED) {
+            registry.insertBusiness(event);
+        }
         if (event.type() == EventType.TOKEN_DEFINED) {
             registry.insertToken(event);   // before any movement, so holdings can take the token's limits
         }
@@ -74,6 +77,9 @@ public class Projector {
             }
             case PAYMENT_REFUND_REQUIRED -> registry.updateOrder(event, Registry.OrderStatus.REFUND_REQUIRED);
             case RULE_VERSION_PUBLISHED -> registry.insertRuleSet(event);
+            case BUSINESS_VERIFIED -> registry.updateBusinessStatus(event, Registry.BusinessStatus.VERIFIED);
+            case BUSINESS_SUSPENDED -> registry.updateBusinessStatus(event, Registry.BusinessStatus.SUSPENDED);
+            case TOKEN_ISSUER_ASSIGNED -> registry.assignIssuer(event);
             default -> {
                 // The rest only move units, or record a decision.
             }
@@ -165,7 +171,7 @@ public class Projector {
     }
 
     private void truncateProjections() {
-        jdbc.execute("TRUNCATE token_movement, holding, reservation, purchase_order, rule_set_version, token"
+        jdbc.execute("TRUNCATE token_movement, holding, reservation, purchase_order, rule_set_version, token, business"
                 + " RESTART IDENTITY");
     }
 
