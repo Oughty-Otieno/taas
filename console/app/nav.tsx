@@ -3,18 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { API, signIn, useSession, useStream } from "@/lib/api";
+import { canSee, SCREENS, screenFor } from "@/lib/access";
 
-const LINKS = [
-  { href: "/", label: "Command Centre" },
-  { href: "/operations", label: "Operations" },
-  { href: "/flows", label: "Two Flows, One Platform" },
-  { href: "/customers", label: "Customers & KYC" },
-  { href: "/businesses", label: "Businesses" },
-  { href: "/ledger", label: "Action Ledger" },
-  { href: "/rules", label: "Rule Studio" },
-  { href: "/staff", label: "Staff" },
-];
 
 type Persona = { id: string; label: string; description: string; scopes: string[]; boundToAccount: boolean };
 type StaffUser = { userId: string; displayName: string; role: string; roleLabel: string };
@@ -26,6 +18,14 @@ export default function Nav() {
   const [open, setOpen] = useState(false);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const current = personas.find((p) => p.id === session?.persona);
+  const router = useRouter();
+  const here = screenFor(path);
+  const allowed = !session || !here || canSee(session, here);
+
+  // A screen this sign-in may not use is not offered at all: opening its address goes to the Command Centre.
+  useEffect(() => {
+    if (!allowed) router.replace("/");
+  }, [allowed, router]);
 
   useEffect(() => {
     fetch(`${API}/v1/dev/personas`).then((r) => r.json()).then(setPersonas).catch(() => {});
@@ -38,13 +38,15 @@ export default function Nav() {
         <span>TaaS</span>
       </div>
       <div className="nav-links">
-        {LINKS.map((l) => (
+        {SCREENS.filter((l) => canSee(session, l)).map((l) => (
           <Link key={l.href} href={l.href} className={path === l.href ? "active" : ""}>
             {l.label}
           </Link>
         ))}
       </div>
-      <span className={`dot ${live ? "dot-on" : ""}`}>{live ? "ledger live" : session && !session.scopes.includes("ledger:read") ? "no ledger access" : "connecting"}</span>
+      {(!session || session.scopes.includes("ledger:read")) && (
+        <span className={`dot ${live ? "dot-on" : ""}`}>{live ? "ledger live" : "connecting"}</span>
+      )}
       <div style={{ position: "relative" }}>
         <button onClick={() => setOpen((o) => !o)} title={session?.scopes.join(" ")}>
           {session?.name ? `${session.name} · ` : ""}

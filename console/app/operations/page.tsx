@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { get, kes, newKey, num, Result, time, useLive, write } from "@/lib/api";
+import { can, get, kes, newKey, num, Result, time, useLive, useSession, write } from "@/lib/api";
 import { EventTape } from "@/components/ui";
 
 type Token = { token: { tokenId: string; name: string; kind: "LOYALTY" | "ASSET"; unitPriceKes: number | null }; supply: any };
@@ -16,6 +16,8 @@ export default function Operations() {
   const { data: tokens } = useLive<Token[]>("/v1/tokens");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [last, setLast] = useState<Sent | null>(null);
+  const session = useSession();
+  const customer = !!session?.accountId;
 
   useEffect(() => {
     get<Account[]>("/v1/accounts").then((a) => setAccounts(a.filter((x) => !x.accountId.startsWith("bidder")))).catch(() => {});
@@ -40,26 +42,33 @@ export default function Operations() {
   return (
     <>
       <h1>Token operations</h1>
-      <p className="lede">
-        Issue, earn, reserve, transfer and redeem, for loyalty and asset tokens alike: the same operations, the same
-        engine, the same ledgers. Each request carries a new Idempotency-Key; use <b>Send again</b> to retry the last
-        one with the same key and see that nothing moves twice.
-      </p>
+      {customer ? (
+        <p className="lede">
+          Reserve and buy asset units, send units to someone else, and redeem what you hold, all from your own account
+          ({session?.accountId}). Use <b>Send again</b> to retry the last request and see that nothing moves twice.
+        </p>
+      ) : (
+        <p className="lede">
+          Issue, earn, reserve, transfer and redeem, for loyalty and asset tokens alike: the same operations, the same
+          engine, the same ledgers. Each request carries a new Idempotency-Key; use <b>Send again</b> to retry the last
+          one with the same key and see that nothing moves twice.
+        </p>
+      )}
       {all.length === 0 && <div className="banner banner-info">No tokens yet. Load the example data from the Command Centre.</div>}
 
       <div className="grid-main">
         <div>
           <div className="grid-2">
-            <Issue tokens={all} send={send} />
-            <Earn accounts={accounts} loyalty={loyalty} send={send} />
-            <Transfer tokens={all} accounts={accounts} send={send} />
-            <Redeem tokens={all} accounts={accounts} send={send} />
+            {can(session, "token:issue") && <Issue tokens={all} send={send} />}
+            {can(session, "token:award") && <Earn accounts={accounts} loyalty={loyalty} send={send} />}
+            {can(session, "token:transfer") && <Transfer tokens={all} accounts={accounts} send={send} />}
+            {can(session, "token:redeem") && <Redeem tokens={all} accounts={accounts} send={send} />}
           </div>
-          <Reserve assets={assets} accounts={accounts} send={send} />
+          {can(session, "token:trade") && <Reserve assets={assets} accounts={accounts} send={send} customer={customer} />}
         </div>
         <div>
           <LastResult last={last} again={again} />
-          <div style={{ marginTop: 14 }}><EventTape limit={20} /></div>
+          {can(session, "ledger:read") && <div style={{ marginTop: 14 }}><EventTape limit={20} /></div>}
         </div>
       </div>
     </>
@@ -183,7 +192,7 @@ function Redeem({ tokens, accounts, send }: { tokens: Token[]; accounts: Account
   );
 }
 
-function Reserve({ assets, accounts, send }: { assets: Token[]; accounts: Account[]; send: SendFn }) {
+function Reserve({ assets, accounts, send, customer }: { assets: Token[]; accounts: Account[]; send: SendFn; customer: boolean }) {
   const [tokenId, setTokenId] = useState("");
   const [account, setAccount] = useState("alice");
   const [units, setUnits] = useState(250);
@@ -213,7 +222,7 @@ function Reserve({ assets, accounts, send }: { assets: Token[]; accounts: Accoun
         {price != null && <span className="muted" style={{ alignSelf: "flex-end", fontSize: 12 }}>{kes(price)} per unit</span>}
       </div>
 
-      <h3 style={{ marginTop: 14 }}>Open reservations</h3>
+      <h3 style={{ marginTop: 14 }}>{customer ? "Your open reservations" : "Open reservations"}</h3>
       {!open?.length && <div className="muted">None held for {tokenId || "this token"}.</div>}
       {!!open?.length && (
         <table>
@@ -257,7 +266,7 @@ function LastResult({ last, again }: { last: Sent | null; again: () => void }) {
       {result.replayed && <div className="banner banner-info">Idempotent replay: the stored reply was returned and nothing moved.</div>}
       {!ok && result.body?.detail && <div className="banner banner-bad">{result.body.detail}</div>}
       {last.op.startsWith("Purchase") && ok && (
-        <div className="banner banner-info">Order placed. The payment is charged after the commit; watch the tape for PAYMENT_RECEIVED and TOKEN_PURCHASED (or PAYMENT_FAILED).</div>
+        <div className="banner banner-info">Order placed. The payment is charged after the commit; the reservation leaves the list once it is paid (or the payment fails).</div>
       )}
       <div className="muted" style={{ fontSize: 12 }}>Idempotency-Key <code>{result.key}</code></div>
       <div className="row" style={{ margin: "8px 0" }}>

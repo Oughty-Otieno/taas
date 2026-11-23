@@ -69,17 +69,25 @@ public class TokenController {
         }).toList();
     }
 
+    /**
+     * One token with its holders and recent activity. A customer sees the token's public figures but only their own
+     * holding and the activity that involves their account, never other customers' trades or balances.
+     */
     @GetMapping("/tokens/{tokenId}")
-    public TokenDetail get(@PathVariable String tokenId) {
+    public TokenDetail get(@AuthenticationPrincipal Jwt jwt, @PathVariable String tokenId) {
+        String bound = Http.boundAccount(jwt);
         TokenDef t = registry.token(tokenId).orElseThrow(() -> new NotFoundException("Token " + tokenId + " not found"));
         TokenLedger.Supply s = tokenLedger.supply(tokenId, t.authorisedSupply());
         long base = Math.max(1, s.issued() - s.redeemed());
-        List<Holder> holders = tokenLedger.holders(tokenId, 20).stream()
+        List<TokenLedger.Holding> visible = bound == null ? tokenLedger.holders(tokenId, 20)
+                : java.util.stream.Stream.of(tokenLedger.holding(tokenId, bound))
+                        .filter(h -> h.available() != 0 || h.reserved() != 0).toList();
+        List<Holder> holders = visible.stream()
                 .map(h -> new Holder(h.accountId(), h.available(), h.reserved(), h.total(),
                         Math.round(h.total() * 10000.0 / (t.kind() == Registry.TokenKind.ASSET ? t.authorisedSupply()
                                 : base)) / 100.0))
                 .toList();
-        ActionLedger.Filter f = new ActionLedger.Filter(tokenId, null, null, null, List.of(), null, null, null);
+        ActionLedger.Filter f = new ActionLedger.Filter(tokenId, null, bound, null, List.of(), null, null, null);
         List<ActionView> recent = actions.list(f, null, 15, true).stream().map(ActionView::of).toList();
         return new TokenDetail(t, t.capUnits(), s, value(t, s), activeRuleSet(t),
                 registry.issuerOf(tokenId).orElse(null), holders, recent);

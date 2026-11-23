@@ -78,7 +78,7 @@ callbacks; tests drive them explicitly.
 |---|---|
 | `401 A valid bearer token is required` on `/` | You opened an API route without a token. Use `/swagger-ui.html` (or `/`, which redirects there) |
 | Console says "connecting" and shows no data | The backend is not running on `NEXT_PUBLIC_TAAS_API`, or the console's origin is not in `TAAS_CORS_ORIGINS` |
-| A screen says your token "does not include" a scope | Switch role with the sign-in menu |
+| A screen is missing from the nav, or its address opens the Command Centre | Your sign-in lacks that screen's scope (customers see only their own screens); switch role with the sign-in menu |
 | `VERSION_EXISTS` when publishing rules | Versions are immutable; publish a new version number |
 | `Ledger integrity failure` on replay | The hash chain is broken (an event was changed outside the application). Run `GET /v1/ledger/verify` to find the first broken `seq` |
 | Flyway fails at start-up after pulling | A migration changed after it was applied locally. For a disposable dev database: `dropdb taas && createdb taas -O taas_user` |

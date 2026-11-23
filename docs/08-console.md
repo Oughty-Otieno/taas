@@ -77,5 +77,6 @@ npm run build && npm start
 | `lib/api.ts` | Sign-in state, token fetching, `get`/`write` helpers (writes add an `Idempotency-Key`), `useStream` (SSE), formatters |
 | `components/ui.tsx` | Shared pieces: `Outcome` pill, `Stat`, `EventTape`, `Drawer`, `Hash`, `Json`, `Requires` (scope gate) |
 | `app/nav.tsx` | Navigation and the sign-in menu |
+| `lib/access.ts` | Which screens each sign-in sees: the nav hides the rest and their addresses redirect to the Command Centre |
 | `app/*/page.tsx` | One file per screen |
 | `app/globals.css` | All styles |

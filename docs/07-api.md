@@ -42,7 +42,7 @@ Tokens last 12 hours. `GET /v1/dev/personas` lists the roles and their scopes.
 | Method | Path | Scope | Body / notes |
 |---|---|---|---|
 | GET | `/v1/tokens` | `token:read` | Every token with authorised, issued, available, reserved, redeemed and owner counts, all derived |
-| GET | `/v1/tokens/{tokenId}` | `token:read` | One token, with its holders |
+| GET | `/v1/tokens/{tokenId}` | `token:read` | One token, with its holders and recent activity; a customer gets only their own holding and the activity involving their account |
 | POST | `/v1/tokens` | `token:issue` | `{tokenId, name, kind: LOYALTY\|ASSET, assetType?, backing?, valuationKes?, unitPriceKes (assets), redeemValueKes?, authorisedSupply, maxHolderPercent?, reservationMinutes?, kycRequired?, inactivityMonths?, ruleSetId?}` → `TOKEN_DEFINED` |
 | POST | `/v1/issuances` | `token:issue` | `{tokenId, units, reference?}` → `TOKEN_ISSUED` |
 | GET | `/v1/accounts/{accountId}/portfolio` | `token:read` | Holdings across every token (customers: their own only) |

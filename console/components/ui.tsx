@@ -87,17 +87,12 @@ export function Json({ value }: { value: unknown }) {
   return <pre className="json">{JSON.stringify(value, null, 2)}</pre>;
 }
 
-/** Shows the screen only if the signed-in role has one of the scopes it needs. */
-export function Requires({ anyOf, what, children }: { anyOf: string[]; what: string; children: React.ReactNode }) {
+/** Shows the screen only if the signed-in role has one of the scopes it needs; otherwise nothing (the nav redirects). */
+export function Requires({ anyOf, children }: { anyOf: string[]; what?: string; children: React.ReactNode }) {
   const session = useSession();
   if (!session) return <div className="muted pad">Signing in…</div>;
   if (anyOf.some((s) => can(session, s))) return <>{children}</>;
-  return (
-    <div className="banner banner-info">
-      Signed in as <b>{session.subject}</b>, whose token does not include <code>{anyOf.join(" or ")}</code>.
-      {" "}{what} Switch role with the sign-in menu (top right).
-    </div>
-  );
+  return null;
 }
 
 /** The answer to a write: "Done", or the refusal's code and reason. */

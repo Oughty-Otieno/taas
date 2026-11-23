@@ -55,6 +55,31 @@ class CustomerTest extends PlatformTestBase {
     }
 
     @Test
+    void aCustomerSeesOnlyTheirOwnActivityOnAToken() throws Exception {
+        loyalty();
+        award("john", 60_000);
+        award("alice", 60_000);
+        award("bob", 60_000);
+        String john = persona("customer", "john");
+        as(john, post("/v1/transfers"), "{\"tokenId\":\"LOYALTY_MPR\",\"fromAccountId\":\"john\",\"toAccountId\":\"alice\",\"units\":5}")
+                .andExpect(status().isCreated());
+
+        JsonNode mine = body(mvc.perform(get("/v1/tokens/LOYALTY_MPR").header("Authorization", "Bearer " + john)));
+        assertThat(mine.get("holders")).hasSize(1);
+        assertThat(mine.get("holders").get(0).get("accountId").asText()).isEqualTo("john");
+        assertThat(mine.get("recent")).isNotEmpty();
+        for (JsonNode a : mine.get("recent")) {
+            JsonNode p = a.get("payload");
+            assertThat(List.of(p.path("accountId").asText(), p.path("fromAccountId").asText(),
+                    p.path("toAccountId").asText())).contains("john");
+        }
+
+        JsonNode staff = body(mvc.perform(get("/v1/tokens/LOYALTY_MPR")
+                .header("Authorization", "Bearer " + persona("auditor", null))));
+        assertThat(staff.get("holders").size()).isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
     void eachRoleHasOnlyItsScopes() throws Exception {
         asset("RWA_APT001");
         as(persona("auditor", null), post("/v1/issuances"), "{\"tokenId\":\"RWA_APT001\",\"units\":1}")

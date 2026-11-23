@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Action, call, get, kes, label, num, time, useLive, useStream, who } from "@/lib/api";
+import { Action, call, can, get, kes, label, num, time, useLive, useSession, useStream, who } from "@/lib/api";
 import { EventTape, Outcome, Stat } from "@/components/ui";
 
 type Summary = {
@@ -29,6 +29,7 @@ const STAGES: { name: string; types: string[] }[] = [
 
 export default function CommandCentre() {
   const { data: tokens, error, reload } = useLive<Summary[]>("/v1/tokens");
+  const session = useSession();
   const [seeding, setSeeding] = useState(false);
   const [lit, setLit] = useState<Record<string, string>>({});
   const clear = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -62,8 +63,12 @@ export default function CommandCentre() {
           </p>
         </div>
         <div className="row">
-          <button onClick={seed} disabled={seeding}>{seeding ? "Loading…" : "Load example data"}</button>
-          <Link href="/flows"><button className="primary">Run the two flows →</button></Link>
+          {session && !session.accountId && (
+            <button onClick={seed} disabled={seeding}>{seeding ? "Loading…" : "Load example data"}</button>
+          )}
+          {(can(session, "token:award") || can(session, "token:trade")) && (
+            <Link href="/flows"><button className="primary">Run the two flows →</button></Link>
+          )}
         </div>
       </div>
 
@@ -81,18 +86,19 @@ export default function CommandCentre() {
 
       {error && <div className="banner banner-bad">Cannot reach the TaaS API: {error}</div>}
 
-      <div className="grid-main">
+      <div className={can(session, "ledger:read") ? "grid-main" : ""}>
         <div className="cards">
           {tokens?.length === 0 && <div className="panel muted">No tokens yet. Load the example data.</div>}
           {tokens?.map((t) => <TokenCard key={t.token.tokenId} t={t} />)}
         </div>
-        <EventTape limit={40} />
+        {can(session, "ledger:read") && <EventTape limit={40} />}
       </div>
     </>
   );
 }
 
 function TokenCard({ t }: { t: Summary }) {
+  const session = useSession();
   const { token, supply, value } = t;
   const [recent, setRecent] = useState<Action[]>([]);
   const load = () =>
@@ -111,7 +117,7 @@ function TokenCard({ t }: { t: Summary }) {
             <code>{token.tokenId}</code> · {asset ? `Real-world asset · ${token.assetType}` : "Loyalty"}
           </div>
           <div className="kind">
-            Issued by {t.issuer ? <Link href="/businesses">{t.issuer.name}</Link> : <span className="muted">no business recorded</span>}
+            Issued by {t.issuer ? (session?.accountId ? <span>{t.issuer.name}</span> : <Link href="/businesses">{t.issuer.name}</Link>) : <span className="muted">no business recorded</span>}
             {t.issuer?.status === "SUSPENDED" && <span className="pill pill-REVERSED" style={{ marginLeft: 6 }}>issuer suspended</span>}
           </div>
         </div>
@@ -148,9 +154,9 @@ function TokenCard({ t }: { t: Summary }) {
           Ownership cap {num(t.capUnits)} units ({(token.maxHolderBps ?? 0) / 100}%) · {token.reservationMinutes}-minute holds · KYC {token.kycRequired ? "required" : "not required"}
         </div>
       )}
-      <h3>Recent transactions</h3>
+      <h3>{session?.accountId ? "Your recent transactions" : "Recent transactions"}</h3>
       <ul className="mini-list">
-        {recent.length === 0 && <li className="muted">None yet</li>}
+        {recent.length === 0 && <li className="muted">{session?.accountId ? "None involving your account" : "None yet"}</li>}
         {recent.map((a) => (
           <li key={a.id}>
             <span>
