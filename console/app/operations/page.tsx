@@ -24,7 +24,7 @@ export default function Operations() {
   }, []);
 
   async function send(op: string, path: string, body: unknown, method = "POST") {
-    const result = await write(path, body, newKey(op.toLowerCase()), method);
+    const result = await write(path, body, newKey(op.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")), method);
     setLast({ op, path, body, method, result });
     return result;
   }
@@ -210,7 +210,8 @@ function Reserve({ assets, accounts, send, customer }: { assets: Token[]; accoun
       <h2>Reserve <span className="pill pill-info">asset</span></h2>
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
         Hold units for a bid. They move from @treasury into the buyer&apos;s RESERVED bucket (counted toward the cap) until
-        the order is paid, the bid is released, or the hold runs out.
+        the order is paid, the bid is released, or the hold runs out. Then order it: <b>pay on phone</b> waits for you to
+        answer the M-PESA prompt here; <b>auto-pay</b> lets the PSP pay by itself.
       </div>
       <div className="row">
         <TokenSelect tokens={assets} value={tokenId} onChange={setTokenId} />
@@ -226,20 +227,41 @@ function Reserve({ assets, accounts, send, customer }: { assets: Token[]; accoun
       {!open?.length && <div className="muted">None held for {tokenId || "this token"}.</div>}
       {!!open?.length && (
         <table>
-          <thead><tr><th>Buyer</th><th className="num">Units</th><th className="num">Amount</th><th>Expires</th><th></th></tr></thead>
+          <thead><tr><th>Buyer</th><th className="num">Units</th><th className="num">Amount</th><th>Expires</th><th>Payment</th><th></th></tr></thead>
           <tbody>
             {open.map((r) => {
               const left = Math.max(0, Math.round((new Date(r.expiresAt).getTime() - now) / 1000));
+              const waiting = r.orderStatus === "AWAITING_PAYMENT";
+              const order = (outcome: string) => async () => {
+                await send(outcome === "MANUAL" ? "Order (M-PESA prompt)" : "Order (auto-pay)", "/v1/orders",
+                  { reservationId: r.reservationId, paymentMethod: "MPESA", simulateOutcome: outcome });
+                setTimeout(reload, 800);   // the prompt opens once the PSP is charged from the outbox
+              };
+              const answer = (pay: boolean) => async () => {
+                await send(pay ? "Pay (PIN entered)" : "Cancel payment", `/v1/orders/${r.orderId}/payment-prompt`, { pay });
+                setTimeout(reload, 1200);   // the PSP's signed callback settles the order
+              };
               return (
                 <tr key={r.reservationId}>
                   <td>{r.accountId}</td>
                   <td className="num">{num(r.units)}</td>
                   <td className="num">{kes(r.amountKes)}</td>
                   <td>{time(r.expiresAt)} <span className={`pill ${left ? "pill-info" : "pill-REVERSED"}`}>{left ? `${left}s` : "due"}</span></td>
+                  <td>
+                    {!r.orderId && <span className="muted">no order yet</span>}
+                    {waiting && r.paymentPromptOpen && <span className="pill pill-info">prompt on the phone</span>}
+                    {waiting && !r.paymentPromptOpen && <span className="pill pill-info">waiting for the provider</span>}
+                  </td>
                   <td className="row" style={{ gap: 6 }}>
-                    <button onClick={async () => { await send("Purchase", "/v1/orders", { reservationId: r.reservationId, paymentMethod: "MPESA", simulateOutcome: "SUCCESS" }); reload(); }}>Purchase</button>
-                    <button onClick={async () => { await send("Purchase (payment fails)", "/v1/orders", { reservationId: r.reservationId, paymentMethod: "MPESA", simulateOutcome: "FAIL" }); reload(); }}>Pay, fail</button>
-                    <button className="danger" onClick={async () => { await send("Release", `/v1/reservations/${r.reservationId}`, undefined, "DELETE"); reload(); }}>Release</button>
+                    {!r.orderId && <>
+                      <button className="primary" onClick={order("MANUAL")} title="Place the order; the M-PESA prompt waits for you to pay">Order, pay on phone</button>
+                      <button onClick={order("SUCCESS")} title="Place the order; the PSP pays by itself after a moment">Order, auto-pay</button>
+                      <button className="danger" onClick={async () => { await send("Release", `/v1/reservations/${r.reservationId}`, undefined, "DELETE"); reload(); }}>Release</button>
+                    </>}
+                    {waiting && r.paymentPromptOpen && <>
+                      <button className="primary" onClick={answer(true)}>Enter PIN and pay</button>
+                      <button className="danger" onClick={answer(false)}>Cancel</button>
+                    </>}
                   </td>
                 </tr>
               );
@@ -265,8 +287,14 @@ function LastResult({ last, again }: { last: Sent | null; again: () => void }) {
       </div>
       {result.replayed && <div className="banner banner-info">Idempotent replay: the stored reply was returned and nothing moved.</div>}
       {!ok && result.body?.detail && <div className="banner banner-bad">{result.body.detail}</div>}
-      {last.op.startsWith("Purchase") && ok && (
-        <div className="banner banner-info">Order placed. The payment is charged after the commit; the reservation leaves the list once it is paid (or the payment fails).</div>
+      {last.op.startsWith("Order") && ok && (
+        <div className="banner banner-info">
+          Order placed. The payment is charged after the commit
+          {last.op.includes("prompt") ? "; answer the M-PESA prompt in the reservation's row." : "; the reservation leaves the list once it is paid (or the payment fails)."}
+        </div>
+      )}
+      {(last.op.startsWith("Pay") || last.op.startsWith("Cancel")) && ok && (
+        <div className="banner banner-info">Prompt answered. The PSP now sends its signed callback, which settles the order.</div>
       )}
       <div className="muted" style={{ fontSize: 12 }}>Idempotency-Key <code>{result.key}</code></div>
       <div className="row" style={{ margin: "8px 0" }}>

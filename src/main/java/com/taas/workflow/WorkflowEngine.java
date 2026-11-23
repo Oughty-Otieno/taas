@@ -77,6 +77,22 @@ public class WorkflowEngine {
         if (asset && c.unitPriceKes() == null) {
             throw new InvalidRequest("An ASSET token needs unitPriceKes");
         }
+        // An asset's valuation is its units times the price per unit; omitted, it is worked out from them.
+        Long valuation = c.valuationKes();
+        if (asset) {
+            long total;
+            try {
+                total = Math.multiplyExact(c.unitPriceKes(), c.authorisedSupply());
+            } catch (ArithmeticException overflow) {
+                throw new InvalidRequest("authorisedSupply × unitPriceKes is too large");
+            }
+            if (valuation != null && valuation != total) {
+                throw new InvalidRequest("valuationKes must equal authorisedSupply × unitPriceKes: " + c.authorisedSupply()
+                        + " × " + c.unitPriceKes() + " = " + total + ", not " + valuation);
+            }
+            valuation = total;
+        }
+        final Long valuationKes = valuation;
         Command cmd = new Command("define-token", c.tokenId(), null, c);
         return runner.execute(caller, cmd, null, tx -> {
             actions.lockChain();   // serialises definitions, so two cannot race to the same id
@@ -89,7 +105,7 @@ public class WorkflowEngine {
             Integer percent = c.maxHolderPercent() != null ? c.maxHolderPercent() : asset ? Integer.valueOf(20) : null;
             SortedMap<String, String> p = fields(
                     "name", c.name(), "kind", c.kind(), "assetType", c.assetType(), "backing", c.backing(),
-                    "valuationKes", c.valuationKes(), "unitPriceKes", c.unitPriceKes(),
+                    "valuationKes", valuationKes, "unitPriceKes", c.unitPriceKes(),
                     "redeemValueKes", c.redeemValueKes(), "authorisedSupply", c.authorisedSupply(),
                     "maxHolderBps", percent == null ? null : percent * 100,
                     "reservationMinutes", c.reservationMinutes() == null ? 15 : c.reservationMinutes(),

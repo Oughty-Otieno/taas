@@ -231,3 +231,6 @@ button.signin-row:hover { border-color: var(--accent); }
 .timeline li.t-FAILED::before { background: var(--failed); }
 .timeline li.t-REVERSED::before { background: var(--reversed); }
 .timeline li.t-DECLINED::before { background: var(--declined); }
+
+/* The buyer's M-PESA prompt in the manual payment flow */
+.mpesa-prompt { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line, #e2e8f0); border-left: 4px solid #16a34a; border-radius: 10px; background: var(--panel-2); display: grid; gap: 4px; max-width: 420px; }

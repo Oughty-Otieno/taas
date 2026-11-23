@@ -74,7 +74,7 @@ public final class Commands {
     }
 
     public record PlaceOrder(@NotNull UUID reservationId, @Size(max = 20) String paymentMethod,
-            @Pattern(regexp = "SUCCESS|FAIL|NO_CALLBACK") String simulateOutcome) {
+            @Pattern(regexp = "SUCCESS|FAIL|NO_CALLBACK|MANUAL") String simulateOutcome) {
     }
 
     public record Transfer(@NotBlank String tokenId, @NotBlank String fromAccountId, @NotBlank String toAccountId,

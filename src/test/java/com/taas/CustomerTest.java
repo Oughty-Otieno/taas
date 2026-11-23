@@ -28,6 +28,7 @@ class CustomerTest extends PlatformTestBase {
     @Autowired KycSignature kycSignature;
     @Autowired FakeKycProvider provider;
     @Autowired ActionLedger actions;
+    @Autowired com.taas.payment.FakePsp psp;
 
     private int n;
 
@@ -77,6 +78,33 @@ class CustomerTest extends PlatformTestBase {
         JsonNode staff = body(mvc.perform(get("/v1/tokens/LOYALTY_MPR")
                 .header("Authorization", "Bearer " + persona("auditor", null))));
         assertThat(staff.get("holders").size()).isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
+    void theBuyerAnswersAManualPaymentPrompt() throws Exception {
+        asset("RWA_APT001");
+        String reservationId = reserve("RWA_APT001", "alice", 100);
+        String orderId = body(write("/v1/orders", "{\"reservationId\":\"" + reservationId
+                + "\",\"simulateOutcome\":\"MANUAL\"}").andExpect(status().isAccepted())).get("orderId").asString();
+        outbox.pollOnce();   // the PSP is charged and the prompt goes to the buyer's phone
+        java.util.UUID id = java.util.UUID.fromString(orderId);
+        assertThat(psp.prompting(id)).isTrue();
+        assertThat(read("/v1/orders/" + orderId).get("paymentPromptOpen").asBoolean()).isTrue();
+        JsonNode held = read("/v1/reservations?accountId=alice&status=HELD").get(0);
+        assertThat(held.get("orderId").asString()).isEqualTo(orderId);
+        assertThat(held.get("orderStatus").asString()).isEqualTo("AWAITING_PAYMENT");
+        assertThat(held.get("paymentPromptOpen").asBoolean()).isTrue();
+
+        String prompt = "/v1/orders/" + orderId + "/payment-prompt";
+        as(persona("customer", "john"), post(prompt), "{\"pay\":true}").andExpect(status().isForbidden());
+        assertThat(psp.prompting(id)).isTrue();   // someone else cannot pay for alice
+
+        as(persona("customer", "alice"), post(prompt), "{\"pay\":true}").andExpect(status().isAccepted());
+        assertThat(psp.prompting(id)).isFalse();
+        as(persona("customer", "alice"), post(prompt), "{\"pay\":true}").andExpect(status().isNotFound());
+
+        callback(orderId, "SUCCEEDED", 100 * 25).andExpect(status().isOk());   // what the PSP sends next
+        assertThat(available("alice", "RWA_APT001")).isEqualTo(100);
     }
 
     @Test

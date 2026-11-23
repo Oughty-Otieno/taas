@@ -18,7 +18,7 @@ so and name the missing scope instead of failing quietly. The choice is remember
 | Route | Screen | Who uses it | What it shows |
 |---|---|---|---|
 | `/` | **Token Command Centre** | everyone | Each token's supply, issued, available, reserved, redeemed and owners; value; a lifecycle strip; recent transactions; the live event tape |
-| `/operations` | **Token operations** | operations, admin, demo | Forms for every movement: Issue, Earn (submit a transaction), Transfer, Redeem, Reserve → Order → Pay; open reservations with Release and Order buttons |
+| `/operations` | **Token operations** | operations, admin, demo | Forms for every movement: Issue, Earn (submit a transaction), Transfer, Redeem, Reserve → Order → Pay; open reservations with **Order, pay on phone** (answer the M-PESA prompt in the row: **Enter PIN and pay** or **Cancel**), **Order, auto-pay** and **Release** |
 | `/flows` | **Two flows, one platform** | presenters | A loyalty award and an asset purchase side by side, step by step, through the same path; the payment-failure and timer-wins variants; the bid-storm concurrency test |
 | `/customers` | **Customers & KYC** | operations, compliance, auditor, customers | Staff: the directory with filters and a "needs review" queue, registration, and a panel per customer with actions, holdings and KYC history. Customers: "My verification", their history and portfolio |
 | `/businesses` | **Businesses** | admin, compliance, everyone (read) | The issuers: register a business, verify or suspend it (a second officer), add an asset under it and issue its supply, name the issuer of an older token, and its ledger history |
@@ -42,8 +42,12 @@ Events are coloured by outcome everywhere (tape, explorer, timelines):
 1. **Command Centre.** Load example data. Point out that every number is derived from the ledger; there is no
    balance column anywhere.
 2. **Two flows, one platform.** Run the loyalty award (John spends KES 60,000 → 100 points under v7), then the asset
-   purchase (reserve → order → the PSP calls back → owned). Same gateway, same engine, same ledgers; only the rule
-   set and token type differ.
+   purchase (reserve → order → the PSP calls back → owned). With payment set to **I pay on the phone (manual)** (the
+   default), the flow stops at **Waiting for payment** and shows the buyer's M-PESA prompt: **Enter PIN and pay**
+   completes it, **Cancel** fails it, and waiting past the hold shows the late-payment path. You can leave the
+   page (to show the units under **Reserved** on the Command Centre) and come back: the waiting order is picked up
+   again with its prompt and countdown. Same gateway, same
+   engine, same ledgers; only the rule set and token type differ.
 3. **The failure paths.** Run the purchase with **Payment fails** (units go back to the treasury), and with **Never paid (timer wins)**
    (the timer wins: `TOKEN_RESERVATION_EXPIRED`, and a later order fails cleanly). Show the red and blue events on
    the tape.

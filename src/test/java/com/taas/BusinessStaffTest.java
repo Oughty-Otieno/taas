@@ -208,6 +208,17 @@ class BusinessStaffTest extends PlatformTestBase {
         return mvc.perform(request);
     }
 
+    @Test
+    void anAssetsValuationIsItsUnitsTimesItsPrice() throws Exception {
+        write("/v1/tokens", "{\"tokenId\":\"RWA_BAD\",\"name\":\"Mismatch\",\"kind\":\"ASSET\","
+                + "\"authorisedSupply\":1000,\"unitPriceKes\":25,\"valuationKes\":30000}")
+                .andExpect(status().isBadRequest());
+        write("/v1/tokens", "{\"tokenId\":\"RWA_OK\",\"name\":\"Derived\",\"kind\":\"ASSET\","
+                + "\"authorisedSupply\":1000,\"unitPriceKes\":25}").andExpect(status().isCreated());
+        assertThat(registry.token("RWA_OK").orElseThrow().valuationKes()).isEqualTo(25_000L);
+        assertThat(registry.token("RWA_BAD")).isEmpty();
+    }
+
     private record JsonAssert(tools.jackson.databind.JsonNode node) {
     }
 }

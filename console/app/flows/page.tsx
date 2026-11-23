@@ -139,6 +139,16 @@ function LoyaltyFlow() {
 
 // --- Asset purchase ------------------------------------------------------------------------------
 
+/** The purchase in progress, kept in the browser so leaving /flows and coming back finds it again. */
+type Pending = { orderId: string; reservation: any; tokenId: string; account: string; units: number; amountKes: number; outcome: string };
+const PENDING_KEY = "taas.flows.pending";
+function readPending(): Pending | null {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) ?? "null"); } catch { return null; }
+}
+function writePending(p: Pending | null) {
+  try { if (p) localStorage.setItem(PENDING_KEY, JSON.stringify(p)); else localStorage.removeItem(PENDING_KEY); } catch { /* storage unavailable */ }
+}
+
 function AssetFlow() {
   const accounts = useAccounts();
   const [assets, setAssets] = useState<any[]>([]);
@@ -146,13 +156,41 @@ function AssetFlow() {
   const [account, setAccount] = useState("alice");
   useValidAccount(accounts, account, setAccount);
   const [units, setUnits] = useState(250);
-  const [outcome, setOutcome] = useState("SUCCESS");
+  const [outcome, setOutcome] = useState("MANUAL");
   const [hold, setHold] = useState(60);
+  const [prompt, setPrompt] = useState<{ orderId: string; amountKes: number } | null>(null);
+  const [answering, setAnswering] = useState(false);
+  // Set once the order settles before the hold ends: the reservation is no longer HELD, so the timer has nothing to do.
+  const [settled, setSettled] = useState<string | null>(null);
   const [steps, setSteps] = useState<Step[]>(initialAsset());
-  const [reservation, setReservation] = useState<any>(null);
+  const [reservation, setReservationState] = useState<any>(null);
+  const reservationRef = useRef<any>(null);
+  const setReservation = (r: any) => { reservationRef.current = r; setReservationState(r); };
   const [order, setOrder] = useState<any>(null);
   const [now, setNow] = useState(Date.now());
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Coming back to the page: pick up an order that is still waiting for payment.
+  useEffect(() => {
+    const p = readPending();
+    if (!p) return;
+    get(`/v1/orders/${p.orderId}`).then((s: any) => {
+      if (s.order.status !== "AWAITING_PAYMENT") { writePending(null); return; }
+      setTokenId(p.tokenId); setAccount(p.account); setUnits(p.units); setOutcome(p.outcome);
+      setReservation(p.reservation);
+      setOrder(s);
+      const steps = initialAsset().map((x, i) => (i < 4 ? { ...x, state: "done" as const } : x));
+      steps[2] = { ...steps[2], detail: `Reservation ${p.reservation.reservationId.slice(0, 8)} held until ${time(p.reservation.expiresAt)}` };
+      steps[3] = { ...steps[3], detail: `Order ${p.orderId.slice(0, 8)} · 202 AWAITING_PAYMENT · resumed` };
+      steps[4] = s.paymentPromptOpen
+        ? { ...steps[4], state: "active", title: "Waiting for payment", detail: "The M-PESA prompt is still on the buyer's phone. Pay or cancel it below." }
+        : { ...steps[4], state: "active", detail: "Waiting for the provider's signed callback…" };
+      setSteps(steps);
+      if (s.paymentPromptOpen) setPrompt({ orderId: p.orderId, amountKes: p.amountKes });
+      watch(p.orderId, p.reservation.reservationId);
+    }).catch(() => writePending(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     get<any[]>("/v1/tokens").then((t) => setAssets(t.filter((x) => x.token.kind === "ASSET"))).catch(() => {});
@@ -180,6 +218,9 @@ function AssetFlow() {
     setSteps(initialAsset());
     setOrder(null);
     setReservation(null);
+    setPrompt(null);
+    setSettled(null);
+    writePending(null);
     patch(0, { state: "active" });
     const r = await write("/v1/reservations", { tokenId, accountId: account, units, holdSeconds: hold || undefined }, newKey("reserve"));
     if (r.status !== 201) {
@@ -197,18 +238,23 @@ function AssetFlow() {
       watch(null, r.body.reservationId);
       return;
     }
-    await placeOrder(r.body.reservationId);
+    await placeOrder(r.body.reservationId, r.body.amountKes);
   }
 
-  async function placeOrder(reservationId: string) {
+  async function placeOrder(reservationId: string, amountKes: number) {
     patch(3, { state: "active" });
     const o = await write("/v1/orders", { reservationId, paymentMethod: "MPESA", simulateOutcome: outcome }, newKey("order"));
     if (o.status !== 202) {
       patch(3, { state: "failed", detail: `${o.status} ${o.body.code}: ${o.body.detail}` });
       return;
     }
-    patch(3, { state: "done", detail: `Order ${o.body.orderId.slice(0, 8)} · 202 AWAITING_PAYMENT · ${outcome === "NO_CALLBACK" ? "the customer never pays" : `PSP will answer ${outcome}`}` });
-    patch(4, { state: "active" });
+    const manual = outcome === "MANUAL";
+    patch(3, { state: "done", detail: `Order ${o.body.orderId.slice(0, 8)} · 202 AWAITING_PAYMENT · ${manual ? "M-PESA prompt sent to the buyer's phone" : outcome === "NO_CALLBACK" ? "the customer never pays" : `PSP will answer ${outcome}`}` });
+    patch(4, manual
+      ? { state: "active", title: "Waiting for payment", detail: "The M-PESA prompt is on the buyer's phone. Pay or cancel it below." }
+      : { state: "active" });
+    if (manual) setPrompt({ orderId: o.body.orderId, amountKes });
+    writePending({ orderId: o.body.orderId, reservation: reservationRef.current, tokenId, account, units, amountKes, outcome });
     watch(o.body.orderId, reservationId);
   }
 
@@ -220,12 +266,19 @@ function AssetFlow() {
         const st = s.order.status;
         if (st === "AWAITING_PAYMENT") return;
         if (poll.current) clearInterval(poll.current);
+        setPrompt(null);
+        writePending(null);
+        if (st === "PAID") setSettled("purchased");
+        if (st === "PAYMENT_FAILED") setSettled("released after the failed payment");
         if (st === "PAID") {
-          patch(4, { state: "done" });
+          patch(4, { state: "done", title: "PSP callback (signed)", detail: "PAYMENT_RECEIVED via /v1/payments/callback" });
           patch(5, { state: "done", detail: `200 ownership assigned · ${s.portfolio.map((h: any) => `${h.tokenId}: ${num(h.available)}`).join(" · ")}` });
         } else if (st === "PAYMENT_FAILED") {
-          patch(4, { state: "failed", detail: "PAYMENT_FAILED: the customer cancelled the M-PESA prompt" });
+          patch(4, { state: "failed", title: "PSP callback (signed)", detail: "PAYMENT_FAILED: the customer cancelled the M-PESA prompt" });
           patch(5, { state: "reversed", title: "Compensation", detail: "Units returned from the buyer's RESERVED bucket to @treasury" });
+        } else if (st === "REFUND_REQUIRED") {
+          patch(4, { state: "failed", title: "PSP callback (signed)", detail: "Paid after the hold had ended: REFUND_REQUIRED" });
+          patch(5, { state: "reversed", title: "No ownership: the payment is refunded", detail: "The units had already gone back to @treasury when the hold expired" });
         } else {
           patch(4, { state: "reversed", detail: "No payment before the hold ran out" });
           patch(5, { state: "reversed", title: "Timer wins: TOKEN_RESERVATION_EXPIRED", detail: "Reversing movement; the reservation stays visible in the ledger" });
@@ -239,6 +292,20 @@ function AssetFlow() {
         }
       }
     }, 1000);
+  }
+
+  /** The buyer answers the M-PESA prompt; the fake PSP then calls back through the signed webhook. */
+  async function answer(pay: boolean) {
+    if (!prompt) return;
+    setAnswering(true);
+    const r = await call(`/v1/orders/${prompt.orderId}/payment-prompt`, { method: "POST", body: { pay } });
+    setAnswering(false);
+    if (r.status !== 202) {
+      patch(4, { state: "failed", detail: `${r.status} ${r.body?.code ?? ""} ${r.body?.detail ?? ""}` });
+      return;
+    }
+    setPrompt(null);
+    patch(4, { state: "active", title: "PSP callback (signed)", detail: pay ? "PIN entered: waiting for the provider's signed callback…" : "Prompt cancelled: waiting for the provider's signed callback…" });
   }
 
   async function lateOrder() {
@@ -267,6 +334,7 @@ function AssetFlow() {
         <label className="field">Units<input type="number" min={1} value={units} onChange={(e) => setUnits(Number(e.target.value))} style={{ width: 100 }} /></label>
         <label className="field">Payment
           <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+            <option value="MANUAL">I pay on the phone (manual)</option>
             <option value="SUCCESS">M-PESA succeeds</option>
             <option value="FAIL">Payment fails</option>
             <option value="NO_CALLBACK">Never paid (timer wins)</option>
@@ -277,10 +345,24 @@ function AssetFlow() {
       </div>
       <div className="row" style={{ marginTop: 10 }}>
         <button className="primary" onClick={start}>Reserve and buy</button>
-        {reservation && <span className={`pill ${expired ? "pill-REVERSED" : "pill-info"}`}>{expired ? "hold expired" : `hold ${left}s left`}</span>}
-        {reservation && expired && <button onClick={lateOrder}>Try a later order</button>}
+        {reservation && settled && <span className="pill pill-OK" title="The reservation is no longer held, so the expiry timer will not touch it">hold closed: {settled}</span>}
+        {reservation && !settled && <span className={`pill ${expired ? "pill-REVERSED" : "pill-info"}`}>{expired ? "hold expired" : `hold ${left}s left`}</span>}
+        {reservation && !settled && expired && <button onClick={lateOrder}>Try a later order</button>}
       </div>
       <Pipeline steps={steps} />
+      {prompt && (
+        <div className="mpesa-prompt">
+          <div className="muted" style={{ fontSize: 12 }}>M-PESA · on {account}&apos;s phone</div>
+          <div>Pay <b>{kes(prompt.amountKes)}</b> for {num(units)} units of {tokenId}?</div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {expired ? "The hold has ended: paying now shows what happens to a late payment." : `The hold ends in ${left}s. Pay before then and the hold closes; the timer then has nothing to release.`}
+          </div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="primary" disabled={answering} onClick={() => answer(true)}>Enter PIN and pay</button>
+            <button className="danger" disabled={answering} onClick={() => answer(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
       {order && (
         <ul className="mini-list">
           {order.timeline.map((a: Action) => (

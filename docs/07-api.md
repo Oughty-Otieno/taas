@@ -43,7 +43,7 @@ Tokens last 12 hours. `GET /v1/dev/personas` lists the roles and their scopes.
 |---|---|---|---|
 | GET | `/v1/tokens` | `token:read` | Every token with authorised, issued, available, reserved, redeemed and owner counts, all derived |
 | GET | `/v1/tokens/{tokenId}` | `token:read` | One token, with its holders and recent activity; a customer gets only their own holding and the activity involving their account |
-| POST | `/v1/tokens` | `token:issue` | `{tokenId, name, kind: LOYALTY\|ASSET, assetType?, backing?, valuationKes?, unitPriceKes (assets), redeemValueKes?, authorisedSupply, maxHolderPercent?, reservationMinutes?, kycRequired?, inactivityMonths?, ruleSetId?}` → `TOKEN_DEFINED` |
+| POST | `/v1/tokens` | `token:issue` | `{tokenId, name, kind: LOYALTY\|ASSET, assetType?, backing?, valuationKes? (assets: must equal authorisedSupply × unitPriceKes; worked out when omitted), unitPriceKes (assets), redeemValueKes?, authorisedSupply, maxHolderPercent?, reservationMinutes?, kycRequired?, inactivityMonths?, ruleSetId?}` → `TOKEN_DEFINED` |
 | POST | `/v1/issuances` | `token:issue` | `{tokenId, units, reference?}` → `TOKEN_ISSUED` |
 | GET | `/v1/accounts/{accountId}/portfolio` | `token:read` | Holdings across every token (customers: their own only) |
 
@@ -53,16 +53,18 @@ Tokens last 12 hours. `GET /v1/dev/personas` lists the roles and their scopes.
 |---|---|---|---|
 | POST | `/v1/awards` | `token:award` | `{accountId, ruleSetId?, transaction: {type, amountKes, merchantId?, channel?, reference?}}`. No amount of units is accepted; the rules decide → `TOKEN_EARNED` or `AWARD_NOT_QUALIFIED` |
 | POST | `/v1/reservations` | `token:trade` | `{tokenId, accountId, units, holdSeconds?}` → 201 `{reservationId, amountKes, expiresAt}` |
-| GET | `/v1/reservations?accountId=&tokenId=&status=` | `token:trade` | Reservations (customers: their own) |
+| GET | `/v1/reservations?accountId=&tokenId=&status=` | `token:trade` | Reservations (customers: their own), each with its order if one was placed: `orderId`, `orderStatus`, `paymentPromptOpen` |
 | DELETE | `/v1/reservations/{id}` | `token:trade` | Release early → `TOKEN_RESERVATION_RELEASED` |
-| POST | `/v1/orders` | `token:trade` | `{reservationId, paymentMethod?: MPESA, simulateOutcome?: SUCCESS\|FAIL\|NO_CALLBACK}` → 202 `AWAITING_PAYMENT` |
-| GET | `/v1/orders/{id}` | `token:trade` | `{order, reservation, step, timeline, portfolio}`: the workflow state, in words, with its events |
+| POST | `/v1/orders` | `token:trade` | `{reservationId, paymentMethod?: MPESA, simulateOutcome?: SUCCESS\|FAIL\|NO_CALLBACK\|MANUAL}` → 202 `AWAITING_PAYMENT` |
+| POST | `/v1/orders/{id}/payment-prompt` | `token:trade` | Demo: `{pay: true\|false}` answers a `MANUAL` order's M-PESA prompt as the buyer (a customer only their own) → 202; the fake PSP then sends its signed callback. 404 when no prompt is waiting |
+| GET | `/v1/orders/{id}` | `token:trade` | `{order, reservation, step, timeline, portfolio, paymentPromptOpen}`: the workflow state, in words, with its events |
 | POST | `/v1/transfers` | `token:transfer` | `{tokenId, fromAccountId, toAccountId, units, reference?}` → `TOKEN_TRANSFERRED` |
 | POST | `/v1/redemptions` | `token:redeem` | `{tokenId, accountId, units, merchantId?, reference?}` → `TOKEN_REDEEMED` |
 | POST | `/v1/payments/callback` | HMAC | `{pspEventId, orderId, status: SUCCEEDED\|FAILED, amountKes, pspReference?, reason?}` with `X-PSP-Timestamp`, `X-PSP-Signature` |
 
 `simulateOutcome` is a demo hook for the fake PSP: `FAIL` makes it decline, `NO_CALLBACK` makes it never answer so
-the timer wins.
+the timer wins, and `MANUAL` leaves the M-PESA prompt waiting on the buyer's phone until they answer it with
+`POST /v1/orders/{id}/payment-prompt`. Paying after the hold has ended gives `REFUND_REQUIRED`.
 
 ### Customers and KYC
 

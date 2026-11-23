@@ -238,6 +238,14 @@ export function useLive<T = any>(path: string | null, refreshOnEvents = true) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(load, 250);
   });
+  // A sign-in that may not watch the ledger (a customer) gets no events, so it refreshes on a short interval instead.
+  const me = useSession();
+  const streams = !!me?.scopes.includes("ledger:read");
+  useEffect(() => {
+    if (!refreshOnEvents || !me || streams) return;
+    const t = setInterval(load, 4000);
+    return () => clearInterval(t);
+  }, [refreshOnEvents, me, streams, load]);
   return { data, error, reload: load };
 }
 

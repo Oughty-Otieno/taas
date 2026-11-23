@@ -210,12 +210,45 @@ function AddAsset({ business, onDone }: { business: Business; onDone: () => void
   const [results, setResults] = useState<Result[]>([]);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF((x) => ({ ...x, [k]: e.target.value }));
   const n = (v: string) => (v ? Number(v) : undefined);
-  const price = n(f.unitPriceKes), supply = n(f.authorisedSupply);
+
+  // Valuation = units × price per unit. The two figures typed most recently are kept; the third is calculated.
+  type Money = "valuationKes" | "authorisedSupply" | "unitPriceKes";
+  const [typed, setTyped] = useState<Money[]>(["authorisedSupply", "unitPriceKes"]);
+  const calculated = (["valuationKes", "authorisedSupply", "unitPriceKes"] as Money[]).find((k) => !typed.includes(k))!;
+  const setMoney = (k: Money) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setF((x) => ({ ...x, [k]: e.target.value }));
+    if (k !== typed[1]) setTyped([typed[1], k]);
+  };
+  const a = n(f[typed[0]]), b = n(f[typed[1]]);
+  let derived: number | undefined;
+  let mismatch = "";
+  if (a && b) {
+    if (calculated === "valuationKes") derived = a * b;
+    else {
+      const total = typed[0] === "valuationKes" ? a : b, other = typed[0] === "valuationKes" ? b : a;
+      derived = total / other;
+      if (!Number.isInteger(derived)) {
+        mismatch = calculated === "unitPriceKes"
+          ? `KES ${num(total)} does not divide evenly into ${num(other)} units. Change the units or the valuation.`
+          : `KES ${num(total)} at KES ${num(other)} per unit is not a whole number of units. Change the price or the valuation.`;
+        derived = undefined;
+      }
+    }
+  }
+  const figures = { ...f, [calculated]: derived === undefined ? "" : String(derived) };
+  const price = n(figures.unitPriceKes), supply = n(figures.authorisedSupply), valuation = n(figures.valuationKes);
+  const moneyField = (k: Money, label: string) => (
+    <label className="field">{label}{k === calculated && <span className="muted" style={{ fontWeight: 400 }}> · calculated</span>}
+      <input type="number" min={1} step={1} value={figures[k]} onChange={setMoney(k)} readOnly={k === calculated}
+        style={k === calculated ? { background: "var(--panel-2)" } : undefined}
+        title={k === calculated ? "Calculated from the other two. Type in this field to calculate a different one instead." : undefined} />
+    </label>
+  );
 
   async function submit() {
     const define = await write("/v1/tokens", {
       tokenId: f.tokenId, name: f.name, kind: "ASSET", assetType: f.assetType || undefined, backing: f.backing || undefined,
-      valuationKes: n(f.valuationKes), unitPriceKes: price, authorisedSupply: supply,
+      valuationKes: valuation, unitPriceKes: price, authorisedSupply: supply,
       maxHolderPercent: n(f.maxHolderPercent), issuerId: business.businessId,
     }, newKey("define"));
     const out = [define];
@@ -234,9 +267,9 @@ function AddAsset({ business, onDone }: { business: Business; onDone: () => void
         <label className="field">Token id<input value={f.tokenId} onChange={(e) => setF((x) => ({ ...x, tokenId: e.target.value.toUpperCase() }))} placeholder="RWA_APT002" /></label>
         <label className="field">Name<input value={f.name} onChange={set("name")} placeholder="Riverside Apartment 002" /></label>
         <label className="field">Asset type<input value={f.assetType} onChange={set("assetType")} placeholder="Apartment" /></label>
-        <label className="field">Valuation (KES)<input type="number" value={f.valuationKes} onChange={set("valuationKes")} /></label>
-        <label className="field">Units (authorised supply)<input type="number" value={f.authorisedSupply} onChange={set("authorisedSupply")} /></label>
-        <label className="field">Price per unit (KES)<input type="number" value={f.unitPriceKes} onChange={set("unitPriceKes")} /></label>
+        {moneyField("valuationKes", "Valuation (KES)")}
+        {moneyField("authorisedSupply", "Units (authorised supply)")}
+        {moneyField("unitPriceKes", "Price per unit (KES)")}
         <label className="field">Ownership cap (% per holder)<input type="number" value={f.maxHolderPercent} onChange={set("maxHolderPercent")} /></label>
         <label className="field">What backs it<input value={f.backing} onChange={set("backing")} placeholder="Title held by a trustee" /></label>
       </div>
@@ -244,6 +277,8 @@ function AddAsset({ business, onDone }: { business: Business; onDone: () => void
         <input type="checkbox" checked={f.issueNow} onChange={(e) => setF((x) => ({ ...x, issueNow: e.target.checked }))} />
         Issue the full supply into the treasury now
       </label>
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Enter any two of valuation, units and price per unit; the third is calculated.</div>
+      {mismatch && <div className="banner banner-bad" style={{ marginTop: 6 }}>{mismatch}</div>}
       {price && supply ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{num(supply)} units at {kes(price)} = {kes(price * supply)} in total; one holder may own at most {num(Math.floor(supply * Number(f.maxHolderPercent || 100) / 100))} units.</div> : null}
       <div className="row" style={{ marginTop: 8 }}>
         <button className="primary" onClick={submit} disabled={!f.tokenId || !f.name || !price || !supply}>Create asset</button>

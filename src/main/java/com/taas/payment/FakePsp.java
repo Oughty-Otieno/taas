@@ -24,7 +24,9 @@ import tools.jackson.databind.ObjectMapper;
 /**
  * A stand-in payment provider (an M-PESA STK push, say). It accepts a charge, then calls back through the
  * gateway with a signed webhook after a short delay, as a real PSP would. {@code simulateOutcome} on the order
- * picks the path for a demo: SUCCESS, FAIL, or NO_CALLBACK (the customer never pays, so the timer wins).
+ * picks the path for a demo: SUCCESS, FAIL, NO_CALLBACK (the customer never pays, so the timer wins), or MANUAL:
+ * the prompt waits on the buyer's "phone" until they answer it with {@link #answer}, as a real STK push waits for
+ * the customer's PIN.
  */
 @Component
 public class FakePsp implements PaymentGateway, DisposableBean {
@@ -32,6 +34,8 @@ public class FakePsp implements PaymentGateway, DisposableBean {
     private static final Logger log = LoggerFactory.getLogger(FakePsp.class);
 
     private final Map<String, String> chargesByKey = new ConcurrentHashMap<>();
+    /** MANUAL charges whose prompt the buyer has not answered yet, by order. */
+    private final Map<java.util.UUID, Charge> prompts = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final PaymentSignature signature;
@@ -56,18 +60,42 @@ public class FakePsp implements PaymentGateway, DisposableBean {
     @Override
     public String charge(Charge charge) {
         boolean[] isNew = {false};
-        String reference = chargesByKey.computeIfAbsent(charge.idempotencyKey(), k -> {
+        String reference = chargesByKey.computeIfAbsent(charge.orderId() + "/" + charge.idempotencyKey(), k -> {
             isNew[0] = true;
             return "PSP-" + Long.toString(Math.abs((long) k.hashCode()) + clock.millis(), 36).toUpperCase();
         });
-        if (isNew[0] && autoCallback && !"NO_CALLBACK".equals(charge.simulateOutcome())) {
-            scheduler.schedule(() -> callBack(charge, reference), delayMs, TimeUnit.MILLISECONDS);
+        if (isNew[0] && "MANUAL".equals(charge.simulateOutcome())) {
+            prompts.put(charge.orderId(), charge);
+        } else if (isNew[0] && autoCallback && !"NO_CALLBACK".equals(charge.simulateOutcome())) {
+            scheduler.schedule(() -> callBack(charge, reference, charge.simulateOutcome()), delayMs,
+                    TimeUnit.MILLISECONDS);
         }
         return reference;
     }
 
-    private void callBack(Charge charge, String reference) {
-        boolean fail = "FAIL".equals(charge.simulateOutcome());
+    /** Whether a MANUAL prompt for this order is still waiting for the buyer. */
+    public boolean prompting(java.util.UUID orderId) {
+        return prompts.containsKey(orderId);
+    }
+
+    /**
+     * The buyer answers the prompt: pay, or cancel it. The verdict reaches the platform the way any PSP verdict
+     * does, through the signed webhook. Returns false when no prompt is waiting (answered already, or never sent).
+     */
+    public boolean answer(java.util.UUID orderId, boolean pay) {
+        Charge charge = prompts.remove(orderId);
+        if (charge == null) {
+            return false;
+        }
+        String reference = chargesByKey.get(charge.orderId() + "/" + charge.idempotencyKey());
+        if (autoCallback) {
+            scheduler.schedule(() -> callBack(charge, reference, pay ? "SUCCESS" : "FAIL"), 300, TimeUnit.MILLISECONDS);
+        }
+        return true;
+    }
+
+    private void callBack(Charge charge, String reference, String outcome) {
+        boolean fail = "FAIL".equals(outcome);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("pspEventId", "evt-" + reference);
         body.put("orderId", charge.orderId());
