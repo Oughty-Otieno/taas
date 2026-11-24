@@ -142,8 +142,13 @@ abstract class PlatformTestBase {
     }
 
     ResultActions signedCallback(String body) throws Exception {
+        return signedPost("/v1/payments/callback", body);
+    }
+
+    /** A webhook from the PSP, signed as the real one would sign it. */
+    ResultActions signedPost(String path, String body) throws Exception {
         long ts = clock.instant().getEpochSecond();
-        return mvc.perform(post("/v1/payments/callback").contentType(MediaType.APPLICATION_JSON).content(body)
+        return mvc.perform(post(path).contentType(MediaType.APPLICATION_JSON).content(body)
                 .header(PaymentSignature.TIMESTAMP_HEADER, Long.toString(ts))
                 .header(PaymentSignature.SIGNATURE_HEADER, pspSignature.sign(ts, body)));
     }

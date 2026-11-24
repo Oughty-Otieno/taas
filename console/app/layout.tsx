@@ -3,7 +3,7 @@ import Nav from "./nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TaaS Console",
+  title: "ZenToken Console",
   description: "Tokenisation as a Service: one ledger, every token.",
 };
 

@@ -1,4 +1,4 @@
-# TaaS: Tokenisation as a Service
+# ZenToken: Tokenisation as a Service
 
 A platform that creates, tracks, transfers and retires digital units of value (loyalty points, and
 fractional shares of real-world assets such as apartments, telecom towers and farms) and can always

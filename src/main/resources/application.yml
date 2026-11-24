@@ -43,6 +43,7 @@ taas:
       auto-callback: true
       callback-delay-ms: 1500
       callback-url: http://localhost:${server.port}/v1/payments/callback
+      payout-callback-url: http://localhost:${server.port}/v1/payments/payout-callback
   kyc:
     # Tier 1 (identity verified) may buy up to this much per purchase; tier 2 has no limit.
     tier1-limit-kes: ${TAAS_KYC_TIER1_LIMIT_KES:100000}

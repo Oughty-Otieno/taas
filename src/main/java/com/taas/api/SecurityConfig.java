@@ -86,7 +86,8 @@ public class SecurityConfig {
                     a.requestMatchers("/actuator/health").permitAll();
                     a.requestMatchers(HttpMethod.GET, "/", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs",
                             "/v3/api-docs/**").permitAll();
-                    a.requestMatchers(HttpMethod.POST, "/v1/payments/callback", "/v1/kyc/callback").permitAll();
+                    a.requestMatchers(HttpMethod.POST, "/v1/payments/callback", "/v1/payments/payout-callback",
+                            "/v1/kyc/callback").permitAll();
                     if (demo) {
                         a.requestMatchers(HttpMethod.POST, "/v1/dev/token").permitAll();
                         a.requestMatchers(HttpMethod.GET, "/v1/dev/personas", "/v1/dev/users").permitAll();
@@ -98,6 +99,7 @@ public class SecurityConfig {
                     a.requestMatchers("/v1/reservations/**", "/v1/orders/**").hasAuthority("SCOPE_token:trade");
                     a.requestMatchers(HttpMethod.POST, "/v1/transfers").hasAuthority("SCOPE_token:transfer");
                     a.requestMatchers(HttpMethod.POST, "/v1/redemptions").hasAuthority("SCOPE_token:redeem");
+                    a.requestMatchers(HttpMethod.GET, "/v1/redemptions/*").hasAuthority("SCOPE_token:redeem");
                     a.requestMatchers(HttpMethod.POST, "/v1/ledger/replay", "/v1/ledger/wipe")
                             .hasAuthority("SCOPE_ledger:admin");
                     a.requestMatchers(HttpMethod.GET, "/v1/ledger/**").hasAuthority("SCOPE_ledger:read");

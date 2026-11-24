@@ -28,9 +28,16 @@ import tools.jackson.databind.JsonNode;
  * (default 0), ties in document order. Every matching rule adds its award; a match on a rule with
  * {@code stopOnMatch} ends evaluation. {@code units} is an integer or an expression over {@code event}, such as
  * {@code "event.amountKes / 1000"} (integer division).
+ *
+ * <p>An optional {@code "redemption": { "kesPerUnit": 10 }} sets what one unit is worth when redeemed while this
+ * version is in force. Without it, the token's own terms apply. Every redemption records the rate and its source.
  */
 public record RuleSet(String ruleSetId, String version, Instant effectiveFrom, String description,
-        List<Rule> rules) {
+        List<Rule> rules, Redemption redemption) {
+
+    /** The conversion rate for redeeming the units this rule set awards. */
+    public record Redemption(long kesPerUnit) {
+    }
 
     public record Rule(String id, String name, String when, String tokenId, String units, int priority,
             boolean stopOnMatch, int position, String createdBy) {
@@ -119,7 +126,17 @@ public record RuleSet(String ruleSetId, String version, Instant effectiveFrom, S
                         text(r, "createdBy")));
             }
         }
-        return new RuleSet(ruleSetId, version, effectiveFrom, text(doc, "description"), rules);
+        Redemption redemption = null;
+        JsonNode r = doc.get("redemption");
+        if (r != null && !r.isNull()) {
+            JsonNode rate = r.get("kesPerUnit");
+            if (rate == null || !rate.isIntegralNumber() || rate.asLong() <= 0) {
+                errors.add("redemption.kesPerUnit must be a whole number of shillings above 0");
+            } else {
+                redemption = new Redemption(rate.asLong());
+            }
+        }
+        return new RuleSet(ruleSetId, version, effectiveFrom, text(doc, "description"), rules, redemption);
     }
 
     private static String text(JsonNode node, String field) {

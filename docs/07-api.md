@@ -59,7 +59,9 @@ Tokens last 12 hours. `GET /v1/dev/personas` lists the roles and their scopes.
 | POST | `/v1/orders/{id}/payment-prompt` | `token:trade` | Demo: `{pay: true\|false}` answers a `MANUAL` order's M-PESA prompt as the buyer (a customer only their own) → 202; the fake PSP then sends its signed callback. 404 when no prompt is waiting |
 | GET | `/v1/orders/{id}` | `token:trade` | `{order, reservation, step, timeline, portfolio, paymentPromptOpen}`: the workflow state, in words, with its events |
 | POST | `/v1/transfers` | `token:transfer` | `{tokenId, fromAccountId, toAccountId, units, reference?}` → `TOKEN_TRANSFERRED` |
-| POST | `/v1/redemptions` | `token:redeem` | `{tokenId, accountId, units, merchantId?, reference?}` → `TOKEN_REDEEMED` |
+| POST | `/v1/redemptions` | `token:redeem` | `{tokenId, accountId, units, merchantId?, reference?}` → 201 `{redemptionId, kesPerUnit, valueKes, rateSource, payout: {status: PENDING, to}}`; `TOKEN_REDEEMED` |
+| GET | `/v1/redemptions/{id}` | `token:redeem` | The receipt: units, rate and its source, value, and `payout.status` `PENDING`/`PAID`/`FAILED` with the M-PESA reference (a customer only their own) |
+| POST | `/v1/payments/payout-callback` | HMAC | `{pspEventId, redemptionId, status: SUCCEEDED\|FAILED, amountKes, pspReference?, reason?}` → `PAYOUT_SENT` / `PAYOUT_FAILED` |
 | POST | `/v1/payments/callback` | HMAC | `{pspEventId, orderId, status: SUCCEEDED\|FAILED, amountKes, pspReference?, reason?}` with `X-PSP-Timestamp`, `X-PSP-Signature` |
 
 `simulateOutcome` is a demo hook for the fake PSP: `FAIL` makes it decline, `NO_CALLBACK` makes it never answer so

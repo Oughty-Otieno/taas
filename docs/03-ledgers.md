@@ -47,7 +47,9 @@ The outcome decides the colour on screen: successes, declines, reversals and fai
 | `PAYMENT_REFUND_REQUIRED` | failed | none (money must go back; no units moved) |
 | `TOKEN_PURCHASED` | OK | buyer reserved → buyer available |
 | `TOKEN_TRANSFERRED` | OK | sender → receiver |
-| `TOKEN_REDEEMED` | OK | customer → `@burn` |
+| `TOKEN_REDEEMED` | OK | customer → `@burn` (records the rate and the value to pay out) |
+| `PAYOUT_SENT` | OK | none (the PSP paid the redemption's value to the holder) |
+| `PAYOUT_FAILED` | failed | none (the PSP could not pay it) |
 | `TOKEN_REVOKED` | reversed | customer → `@treasury` (loyalty inactivity) |
 | `RULE_VERSION_PUBLISHED` | OK | none (creates a `rule_set_version` row) |
 | `CUSTOMER_REGISTERED` | OK | none |

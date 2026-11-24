@@ -1,6 +1,6 @@
 # 5. Rules and policy
 
-TaaS separates three kinds of "rules", because each needs a different guarantee:
+ZenToken separates three kinds of "rules", because each needs a different guarantee:
 
 | Kind | Example | Who changes it | Enforced by | Guarantee |
 |---|---|---|---|---|
@@ -35,6 +35,9 @@ A rule set is a JSON document, published as an event (`RULE_VERSION_PUBLISHED`).
   rule, publish a new version.
 - **Which version applies** is the one with the latest `effectiveFrom` that is not in the future. Publishing a version
   with a future `effectiveFrom` schedules it.
+- **A version may set the redemption rate**: `"redemption": { "kesPerUnit": 12 }` (a whole number above 0). While
+  it is in force, every redemption of the token is valued at that rate and records the version; a version without it
+  leaves the token's own terms in place. Rule Studio shows the rate with each version and has a field for it in the draft.
 - **Every award records its version** (`rule_version = loyalty.default@v7`), so an award made in October under v6 is
   still explained by v6 after v7 takes over.
 

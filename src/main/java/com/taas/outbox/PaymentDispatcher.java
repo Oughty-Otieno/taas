@@ -6,7 +6,10 @@ import com.taas.ledger.ActionEvent;
 import com.taas.ledger.EventType;
 import com.taas.payment.PaymentGateway;
 
-/** Charges the customer once an order has committed, with the order's idempotency key. */
+/**
+ * Talks to the payment provider once a transaction has committed: charges the buyer for an order, and pays the
+ * holder for a redemption.
+ */
 @Component
 public class PaymentDispatcher implements OutboxSubscriber {
 
@@ -18,6 +21,14 @@ public class PaymentDispatcher implements OutboxSubscriber {
 
     @Override
     public void onEvent(ActionEvent e) {
+        if (e.type() == EventType.TOKEN_REDEEMED) {
+            String value = e.opt("valueKes");
+            if (value != null && Long.parseLong(value) > 0) {
+                gateway.payout(new PaymentGateway.Payout(e.id(), Long.parseLong(value), e.get("accountId"),
+                        e.opt("payoutTo")));
+            }
+            return;
+        }
         if (e.type() != EventType.ORDER_PLACED) {
             return;
         }

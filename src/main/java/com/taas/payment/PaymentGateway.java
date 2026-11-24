@@ -14,4 +14,11 @@ public interface PaymentGateway {
 
     /** Asks the provider to collect. Same idempotency key, same charge: calling twice never charges twice. */
     String charge(Charge charge);
+
+    /** Money going the other way: a redemption's value sent to the holder (an M-PESA B2C payment, say). */
+    record Payout(UUID redemptionId, long amountKes, String accountId, String payoutTo) {
+    }
+
+    /** Asks the provider to pay out. One payout per redemption, however often it is asked. */
+    String payout(Payout payout);
 }

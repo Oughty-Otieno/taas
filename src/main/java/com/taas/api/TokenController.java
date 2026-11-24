@@ -38,11 +38,12 @@ public class TokenController {
     }
 
     public record TokenSummary(TokenDef token, Long capUnits, TokenLedger.Supply supply, Value value,
-            String activeRuleSet, Registry.Business issuer) {
+            String activeRuleSet, Registry.Business issuer, WorkflowEngine.RedemptionRate redemption) {
     }
 
     public record TokenDetail(TokenDef token, Long capUnits, TokenLedger.Supply supply, Value value,
-            String activeRuleSet, Registry.Business issuer, List<Holder> holders, List<ActionView> recent) {
+            String activeRuleSet, Registry.Business issuer, WorkflowEngine.RedemptionRate redemption,
+            List<Holder> holders, List<ActionView> recent) {
     }
 
     private final Registry registry;
@@ -64,8 +65,8 @@ public class TokenController {
     public List<TokenSummary> list() {
         return registry.tokens().stream().map(t -> {
             TokenLedger.Supply s = tokenLedger.supply(t.tokenId(), t.authorisedSupply());
-            return new TokenSummary(t, t.capUnits(), s, value(t, s), activeRuleSet(t),
-                    registry.issuerOf(t.tokenId()).orElse(null));
+            return new TokenSummary(t, t.capUnits(), s, value(t, s, rate(t)), activeRuleSet(t),
+                    registry.issuerOf(t.tokenId()).orElse(null), rate(t));
         }).toList();
     }
 
@@ -89,8 +90,8 @@ public class TokenController {
                 .toList();
         ActionLedger.Filter f = new ActionLedger.Filter(tokenId, null, bound, null, List.of(), null, null, null);
         List<ActionView> recent = actions.list(f, null, 15, true).stream().map(ActionView::of).toList();
-        return new TokenDetail(t, t.capUnits(), s, value(t, s), activeRuleSet(t),
-                registry.issuerOf(tokenId).orElse(null), holders, recent);
+        return new TokenDetail(t, t.capUnits(), s, value(t, s, rate(t)), activeRuleSet(t),
+                registry.issuerOf(tokenId).orElse(null), rate(t), holders, recent);
     }
 
     @PostMapping("/tokens")
@@ -114,12 +115,18 @@ public class TokenController {
                 .orElse(t.ruleSetId() + " (no version in force)");
     }
 
-    private static Value value(TokenDef t, TokenLedger.Supply s) {
+    private WorkflowEngine.RedemptionRate rate(TokenDef t) {
+        return engine.redemptionRate(t, clock.instant()).orElse(null);
+    }
+
+    /** Redeem value and liability use the rate in force, which a rule version may set. */
+    private static Value value(TokenDef t, TokenLedger.Supply s, WorkflowEngine.RedemptionRate rate) {
         if (t.kind() == Registry.TokenKind.ASSET) {
             Long owned = t.unitPriceKes() == null ? null : t.unitPriceKes() * s.circulating();
             return new Value(t.unitPriceKes(), t.valuationKes(), null, owned, null);
         }
-        Long liability = t.redeemValueKes() == null ? null : t.redeemValueKes() * s.circulating();
-        return new Value(null, null, t.redeemValueKes(), null, liability);
+        Long perUnit = rate == null ? null : rate.kesPerUnit();
+        Long liability = perUnit == null ? null : perUnit * s.circulating();
+        return new Value(null, null, perUnit, null, liability);
     }
 }

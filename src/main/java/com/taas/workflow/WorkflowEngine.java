@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import com.taas.common.InvalidRequest;
 import com.taas.common.NotFoundException;
 import com.taas.common.Rejection;
+import com.taas.customer.CustomerDirectory;
 import com.taas.ledger.Accounts;
 import com.taas.ledger.ActionEvent;
 import com.taas.ledger.ActionLedger;
@@ -56,10 +57,12 @@ public class WorkflowEngine {
     private final RuleEngine rules;
     private final ObjectMapper json;
     private final String defaultRuleSet;
+    private final CustomerDirectory directory;
 
     public WorkflowEngine(CommandRunner runner, Registry registry, TokenLedger tokenLedger, ActionLedger actions,
-            PolicyDecisionPoint pdp, RuleEngine rules, ObjectMapper json,
+            PolicyDecisionPoint pdp, RuleEngine rules, ObjectMapper json, CustomerDirectory directory,
             @Value("${taas.rules.default-loyalty-rule-set}") String defaultRuleSet) {
+        this.directory = directory;
         this.runner = runner;
         this.registry = registry;
         this.tokenLedger = tokenLedger;
@@ -417,19 +420,85 @@ public class WorkflowEngine {
         });
     }
 
+    /** What one unit is worth when redeemed, and where that figure comes from (a rule version or the token). */
+    public record RedemptionRate(long kesPerUnit, String source, boolean fromRules) {
+    }
+
+    /**
+     * The rate in force at {@code at}. A loyalty token takes it from its active rule version when that version sets
+     * {@code redemption.kesPerUnit}, otherwise from its own terms; an asset is redeemed at its unit price.
+     */
+    public java.util.Optional<RedemptionRate> redemptionRate(TokenDef t, Instant at) {
+        if (t.kind() == TokenKind.ASSET) {
+            return java.util.Optional.ofNullable(t.unitPriceKes())
+                    .map(p -> new RedemptionRate(p, "unit price, " + t.policyRuleVersion(), false));
+        }
+        if (t.ruleSetId() != null) {
+            java.util.Optional<Registry.RuleSetVersion> v = registry.activeRuleSet(t.ruleSetId(), at);
+            if (v.isPresent()) {
+                RuleSet rs = RuleSet.parse(json.readTree(v.get().document()), new ArrayList<>());
+                if (rs.redemption() != null) {
+                    return java.util.Optional.of(new RedemptionRate(rs.redemption().kesPerUnit(),
+                            t.ruleSetId() + "@" + v.get().version(), true));
+                }
+            }
+        }
+        return java.util.Optional.ofNullable(t.redeemValueKes())
+                .map(r -> new RedemptionRate(r, "token terms", false));
+    }
+
+    /**
+     * Retires units into @burn and pays their value to the holder's M-PESA. The event records the rate and the rule
+     * version (or token terms) that set it; the payout itself goes to the PSP from the outbox after the commit, and
+     * its answer comes back through {@code POST /v1/payments/payout-callback} as PAYOUT_SENT or PAYOUT_FAILED.
+     */
     public Reply redeem(Caller caller, Commands.Redeem c) {
         TokenDef token = requireToken(c.tokenId());
         requireHolder(c.accountId());
         Command cmd = new Command("redeem", token.tokenId(), token.tokenId(), c);
         return runner.execute(caller, cmd, () -> pdp.requireActingFor(caller, c.accountId()), tx -> {
             lock(token.tokenId());
-            Long perUnit = token.kind() == TokenKind.LOYALTY ? token.redeemValueKes() : token.unitPriceKes();
-            long valueKes = perUnit == null ? 0 : Math.multiplyExact(perUnit, c.units());
-            ActionEvent e = tx.record(EventType.TOKEN_REDEEMED, token.tokenId(), token.tokenId(),
-                    token.policyRuleVersion(), fields("accountId", c.accountId(), "units", c.units(),
-                            "merchantId", c.merchantId(), "reference", c.reference(), "valueKes", valueKes));
-            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "valueKes", valueKes,
+            RedemptionRate rate = redemptionRate(token, tx.now()).orElse(null);
+            long perUnit = rate == null ? 0 : rate.kesPerUnit();
+            long valueKes = Math.multiplyExact(perUnit, c.units());
+            String payoutTo = directory.customer(c.accountId()).map(CustomerDirectory.Customer::phoneMasked)
+                    .filter(p -> p != null && !p.isBlank()).map(p -> "M-PESA " + p)
+                    .orElse("M-PESA (" + c.accountId() + ")");
+            String ruleVersion = rate != null && rate.fromRules() ? rate.source() : token.policyRuleVersion();
+            ActionEvent e = tx.record(EventType.TOKEN_REDEEMED, token.tokenId(), token.tokenId(), ruleVersion,
+                    fields("accountId", c.accountId(), "units", c.units(), "merchantId", c.merchantId(),
+                            "reference", c.reference(), "kesPerUnit", perUnit, "valueKes", valueKes,
+                            "rateSource", rate == null ? null : rate.source(),
+                            "payoutMethod", valueKes > 0 ? "MPESA" : null, "payoutTo", valueKes > 0 ? payoutTo : null));
+            return Reply.of(201, body("actionId", e.id(), "seq", e.seq(), "redemptionId", e.id(),
+                    "units", c.units(), "kesPerUnit", perUnit, "valueKes", valueKes,
+                    "rateSource", rate == null ? null : rate.source(),
+                    "payout", valueKes > 0 ? body("status", "PENDING", "to", payoutTo) : body("status", "NONE"),
                     "holding", tokenLedger.holding(token.tokenId(), c.accountId())));
+        });
+    }
+
+    /** The PSP's answer to a payout. Idempotent on the PSP event id; a payout already sent is not sent again. */
+    public Reply payoutCallback(Commands.PayoutCallback c) {
+        ActionEvent redemption = actions.find(c.redemptionId()).filter(x -> x.type() == EventType.TOKEN_REDEEMED)
+                .orElseThrow(() -> new NotFoundException("Redemption " + c.redemptionId() + " not found"));
+        Caller caller = new Caller("psp", "psp:" + c.pspEventId());
+        Command cmd = new Command("payout-callback", redemption.tokenId(), redemption.tokenId(), c);
+        return runner.execute(caller, cmd, null, tx -> {
+            lock(redemption.tokenId());
+            actions.payoutFor(c.redemptionId()).filter(p -> p.type() == EventType.PAYOUT_SENT).ifPresent(p -> {
+                throw Rejection.conflict("PAYOUT_ALREADY_SENT", "Redemption " + c.redemptionId()
+                        + " was already paid out (event #" + p.seq() + ")");
+            });
+            boolean ok = "SUCCEEDED".equals(c.status());
+            ActionEvent e = tx.record(ok ? EventType.PAYOUT_SENT : EventType.PAYOUT_FAILED, redemption.tokenId(),
+                    redemption.tokenId(), redemption.ruleVersion(),
+                    fields("redemptionId", c.redemptionId(), "accountId", redemption.get("accountId"),
+                            "amountKes", c.amountKes(), "payoutTo", redemption.opt("payoutTo"),
+                            "pspEventId", c.pspEventId(), "pspReference", c.pspReference(),
+                            "reason", ok ? null : c.reason()));
+            return Reply.of(200, body("actionId", e.id(), "seq", e.seq(), "redemptionId", c.redemptionId(),
+                    "status", ok ? "PAID" : "FAILED"));
         });
     }
 

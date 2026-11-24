@@ -234,3 +234,12 @@ button.signin-row:hover { border-color: var(--accent); }
 
 /* The buyer's M-PESA prompt in the manual payment flow */
 .mpesa-prompt { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line, #e2e8f0); border-left: 4px solid #16a34a; border-radius: 10px; background: var(--panel-2); display: grid; gap: 4px; max-width: 420px; }
+
+/* The redemption rate shown with a rule version */
+.redeem-rate { margin: 8px 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--panel-2); font-size: 13px; }
+
+/* A redemption receipt: the payout on its way, then received */
+.receipt { margin-top: 10px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line, #e2e8f0); border-left: 4px solid #16a34a; background: var(--panel-2); display: grid; gap: 4px; }
+.receipt .amount { font-size: 22px; font-weight: 700; }
+.receipt.pending { border-left-color: #2563eb; }
+.receipt.failed { border-left-color: #dc2626; }

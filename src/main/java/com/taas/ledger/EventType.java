@@ -19,6 +19,8 @@ public enum EventType {
     TOKEN_PURCHASED(Outcome.OK),
     TOKEN_TRANSFERRED(Outcome.OK),
     TOKEN_REDEEMED(Outcome.OK),
+    PAYOUT_SENT(Outcome.OK),
+    PAYOUT_FAILED(Outcome.FAILED),
     TOKEN_REVOKED(Outcome.REVERSED),
     RULE_VERSION_PUBLISHED(Outcome.OK),
     CUSTOMER_REGISTERED(Outcome.OK),

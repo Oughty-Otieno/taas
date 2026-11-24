@@ -156,4 +156,30 @@ public class OperationsController {
             @RequestHeader(Http.IDEMPOTENCY_KEY) String key, @Valid @RequestBody Commands.Redeem body) {
         return Http.send(engine.redeem(Http.caller(jwt, key), body));
     }
+
+    /** A redemption and its payout, as a receipt: what was retired, at what rate, and whether the money arrived. */
+    public record Redemption(UUID redemptionId, long seq, String tokenId, String accountId, long units,
+            long kesPerUnit, long valueKes, String rateSource, String ruleVersion, java.time.Instant redeemedAt,
+            Payout payout) {
+    }
+
+    /** PENDING until the PSP answers; PAID or FAILED after; NONE when the units had no cash value. */
+    public record Payout(String status, String to, String pspReference, String reason, java.time.Instant at) {
+    }
+
+    @GetMapping("/redemptions/{id}")
+    public Redemption redemption(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
+        var e = actions.find(id).filter(x -> x.type() == com.taas.ledger.EventType.TOKEN_REDEEMED)
+                .orElseThrow(() -> new NotFoundException("Redemption " + id + " not found"));
+        Http.requireOwn(jwt, e.get("accountId"));
+        long value = e.opt("valueKes") == null ? 0 : e.getLong("valueKes");
+        Payout payout = value <= 0 ? new Payout("NONE", null, null, null, null)
+                : actions.payoutFor(id).map(p -> new Payout(
+                        p.type() == com.taas.ledger.EventType.PAYOUT_SENT ? "PAID" : "FAILED", e.opt("payoutTo"),
+                        p.opt("pspReference"), p.opt("reason"), p.occurredAt()))
+                        .orElse(new Payout("PENDING", e.opt("payoutTo"), null, null, null));
+        return new Redemption(id, e.seq(), e.tokenId(), e.get("accountId"), e.getLong("units"),
+                e.opt("kesPerUnit") == null ? 0 : e.getLong("kesPerUnit"), value, e.opt("rateSource"),
+                e.ruleVersion(), e.occurredAt(), payout);
+    }
 }

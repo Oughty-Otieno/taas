@@ -95,6 +95,14 @@ public class ActionLedger {
         return jdbc.query("SELECT * FROM action_event WHERE id = ?", rowMapper, id).stream().findFirst();
     }
 
+    /** The latest payout event (sent or failed) for a redemption, if the provider has answered. */
+    public Optional<ActionEvent> payoutFor(UUID redemptionId) {
+        return jdbc.query("""
+                SELECT * FROM action_event WHERE event_type IN ('PAYOUT_SENT', 'PAYOUT_FAILED')
+                  AND payload->>'redemptionId' = ? ORDER BY seq DESC LIMIT 1""", rowMapper, redemptionId.toString())
+                .stream().findFirst();
+    }
+
     public Optional<ActionEvent> findBySeq(long seq) {
         return jdbc.query("SELECT * FROM action_event WHERE seq = ?", rowMapper, seq).stream().findFirst();
     }

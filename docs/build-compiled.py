@@ -23,7 +23,7 @@ WORK.mkdir(parents=True, exist_ok=True)
 OUT.mkdir(parents=True, exist_ok=True)
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PROFILE = WORK / "chrome-profile"
-TITLE = "TaaS: Tokenisation as a Service"
+TITLE = "ZenToken: Tokenisation as a Service"
 SUBTITLE = "System documentation"
 TODAY = date.today().strftime("%d %B %Y").lstrip("0")
 GREEN = "0F7B55"
@@ -297,7 +297,7 @@ figure.diagram svg {{ max-width: 100% !important; height: auto; max-height: 200m
 {''.join(body)}
 </body></html>""")
 
-pdf = OUT / "TaaS-Documentation.pdf"
+pdf = OUT / "ZenToken-Documentation.pdf"
 chrome(f"--print-to-pdf={pdf}", "--no-pdf-header-footer", "--virtual-time-budget=5000", pdf_html.as_uri())
 
 # ----------------------------------------------------------------------------------------------
@@ -597,7 +597,7 @@ for tag, text in (("begin", None), (None, "PAGE"), ("end", None)):
 pr.font.size = Pt(8.5)
 sec.different_first_page_header_footer = True
 
-docx_path = OUT / "TaaS-Documentation.docx"
+docx_path = OUT / "ZenToken-Documentation.docx"
 doc.save(docx_path)
 print(f"diagrams={len(svgs)} chapters={len(chapters)}")
 print(pdf)

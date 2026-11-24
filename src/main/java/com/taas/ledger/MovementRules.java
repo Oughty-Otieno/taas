@@ -28,7 +28,7 @@ public final class MovementRules {
                     RULE_VERSION_PUBLISHED, REQUEST_REJECTED, CUSTOMER_REGISTERED, KYC_SUBMITTED, KYC_REFERRED,
                     KYC_VERIFIED, KYC_REJECTED, KYC_REVOKED, PII_ERASED, BUSINESS_REGISTERED, BUSINESS_VERIFIED,
                     BUSINESS_SUSPENDED, TOKEN_ISSUER_ASSIGNED, STAFF_USER_CREATED, STAFF_ROLE_CHANGED,
-                    STAFF_USER_DISABLED, STAFF_USER_ENABLED -> List.of();
+                    STAFF_USER_DISABLED, STAFF_USER_ENABLED, PAYOUT_SENT, PAYOUT_FAILED -> List.of();
             case TOKEN_ISSUED -> move(Accounts.MINT, Bucket.AVAILABLE, Accounts.TREASURY, Bucket.AVAILABLE, units(e));
             case TOKEN_EARNED -> move(Accounts.TREASURY, Bucket.AVAILABLE, e.get("accountId"), Bucket.AVAILABLE,
                     units(e));

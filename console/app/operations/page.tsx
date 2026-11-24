@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { can, get, kes, newKey, num, Result, time, useLive, useSession, write } from "@/lib/api";
 import { EventTape } from "@/components/ui";
 
-type Token = { token: { tokenId: string; name: string; kind: "LOYALTY" | "ASSET"; unitPriceKes: number | null }; supply: any };
+type Token = { token: { tokenId: string; name: string; kind: "LOYALTY" | "ASSET"; unitPriceKes: number | null }; supply: any;
+  redemption: { kesPerUnit: number; source: string; fromRules: boolean } | null };
 type Account = { accountId: string; displayName: string; kycStatus: string };
 type Sent = { op: string; path: string; body: unknown; method: string; result: Result };
 
@@ -177,17 +178,78 @@ function Redeem({ tokens, accounts, send }: { tokens: Token[]; accounts: Account
   const [tokenId, setTokenId] = useState("");
   const [account, setAccount] = useState("john");
   const [units, setUnits] = useState(10);
+  const [receiptId, setReceiptId] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<any>(null);
+  const t = tokens.find((x) => x.token.tokenId === tokenId);
+  const rate = t?.redemption ?? null;
+  const unit = t?.token.kind === "LOYALTY" ? "point" : "unit";
+  const value = rate ? rate.kesPerUnit * (units || 0) : 0;
+
+  // Follow the payout until the PSP confirms it (or says it failed).
+  useEffect(() => {
+    if (!receiptId) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const r = await get(`/v1/redemptions/${receiptId}`);
+        if (stop) return;
+        setReceipt(r);
+        if (r.payout.status === "PENDING") setTimeout(tick, 800);
+      } catch { if (!stop) setTimeout(tick, 1500); }
+    };
+    tick();
+    return () => { stop = true; };
+  }, [receiptId]);
+
+  async function redeem() {
+    setReceipt(null);
+    setReceiptId(null);
+    const r = await send("Redeem", "/v1/redemptions", { tokenId, accountId: account, units, reference: "Console redemption" });
+    if (r.status === 201) setReceiptId(r.body.redemptionId);
+  }
+
   return (
     <div className="panel">
       <h2>Redeem</h2>
-      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>Burn units against a merchant (loyalty) or a payout (asset). Units move to @burn.</div>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        Cash in units: they are retired (moved to @burn) and their value is paid to the holder&apos;s M-PESA.
+      </div>
       <div className="row">
-        <TokenSelect tokens={tokens} value={tokenId} onChange={setTokenId} />
+        <TokenSelect tokens={tokens} value={tokenId} onChange={(v) => { setTokenId(v); setReceipt(null); setReceiptId(null); }} />
         <AccountSelect label="Holder" accounts={accounts} value={account} onChange={setAccount} />
         <Units value={units} onChange={setUnits} />
-        <button className="primary" style={{ alignSelf: "flex-end" }} disabled={!tokenId}
-          onClick={() => send("Redeem", "/v1/redemptions", { tokenId, accountId: account, units, merchantId: "console", reference: "Console redemption" })}>Redeem</button>
+        <button className="primary" style={{ alignSelf: "flex-end" }} disabled={!tokenId} onClick={redeem}>Redeem</button>
       </div>
+      {rate && (
+        <div className="redeem-rate">
+          Rate: 1 {unit} = <b>{kes(rate.kesPerUnit)}</b>
+          <span className="muted"> · {rate.fromRules ? <>set by rule version <code>{rate.source}</code></> : rate.source === "token terms" ? "the token's own terms (no rule version sets a rate)" : rate.source}</span>
+          <div>{num(units || 0)} {unit}{units === 1 ? "" : "s"} → you receive <b>{kes(value)}</b> on M-PESA</div>
+        </div>
+      )}
+      {receipt && <Receipt r={receipt} unit={unit} />}
+    </div>
+  );
+}
+
+/** The redemption as the customer sees it: what they gave up, at what rate, and the money arriving. */
+function Receipt({ r, unit }: { r: any; unit: string }) {
+  const p = r.payout;
+  const cls = p.status === "PAID" ? "" : p.status === "FAILED" ? "failed" : "pending";
+  return (
+    <div className={`receipt ${cls}`}>
+      <div className="muted" style={{ fontSize: 12 }}>
+        {p.status === "PENDING" && <>Sending to {p.to}…</>}
+        {p.status === "PAID" && <>✓ Received on {p.to} · {time(p.at)}</>}
+        {p.status === "FAILED" && <>✕ Payout failed: {p.reason ?? "the provider declined it"}</>}
+        {p.status === "NONE" && <>No cash value: nothing to pay out</>}
+      </div>
+      <div className="amount">{kes(r.valueKes)}</div>
+      <div style={{ fontSize: 13 }}>
+        {num(r.units)} {r.tokenId} {unit}{r.units === 1 ? "" : "s"} redeemed at {kes(r.kesPerUnit)} each
+        <span className="muted"> · rate from {r.rateSource} · ledger event #{r.seq}</span>
+      </div>
+      {p.pspReference && <div className="muted" style={{ fontSize: 12 }}>M-PESA reference <code>{p.pspReference}</code></div>}
     </div>
   );
 }

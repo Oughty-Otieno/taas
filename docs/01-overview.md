@@ -1,8 +1,8 @@
 # 1. Overview
 
-## What TaaS is
+## What ZenToken is
 
-TaaS is a platform for **tokens**: whole-number units of value that a customer can earn, buy, hold, send and
+ZenToken is a platform for **tokens**: whole-number units of value that a customer can earn, buy, hold, send and
 spend. It supports two kinds today:
 
 | Kind | Example | How a customer gets units | What limits apply |

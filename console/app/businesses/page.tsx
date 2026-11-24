@@ -238,7 +238,7 @@ function AddAsset({ business, onDone }: { business: Business; onDone: () => void
   const figures = { ...f, [calculated]: derived === undefined ? "" : String(derived) };
   const price = n(figures.unitPriceKes), supply = n(figures.authorisedSupply), valuation = n(figures.valuationKes);
   const moneyField = (k: Money, label: string) => (
-    <label className="field">{label}{k === calculated && <span className="muted" style={{ fontWeight: 400 }}> · calculated</span>}
+    <label className="field"><span>{label}{k === calculated && <span className="muted" style={{ fontWeight: 400 }}> · calculated</span>}</span>
       <input type="number" min={1} step={1} value={figures[k]} onChange={setMoney(k)} readOnly={k === calculated}
         style={k === calculated ? { background: "var(--panel-2)" } : undefined}
         title={k === calculated ? "Calculated from the other two. Type in this field to calculate a different one instead." : undefined} />

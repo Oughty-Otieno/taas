@@ -44,7 +44,7 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant B as Buyer (alice)
-    participant API as TaaS API
+    participant API as ZenToken API
     participant PDP as Policy
     participant DB as Ledgers
     participant OB as Outbox
@@ -111,8 +111,19 @@ Checks, in order:
 
 ## Redemptions
 
-`POST /v1/redemptions {tokenId, accountId, units, merchantId}` moves units to `@burn` (`TOKEN_REDEEMED`). The event
-records the value: `redeemValueKes` per unit for loyalty (KES 10 for `LOYALTY_MPR`), the unit price for assets.
+`POST /v1/redemptions {tokenId, accountId, units}` cashes units in: they move to `@burn` (`TOKEN_REDEEMED`) and their
+value is paid to the holder's M-PESA.
+
+- **The rate.** For a loyalty token it comes from the rule version in force when that version sets
+  `redemption.kesPerUnit` (see [Rules](05-rules-and-policy.md)); otherwise from the token's own terms (`redeemValueKes`,
+  KES 10 for `LOYALTY_MPR`). An asset is redeemed at its unit price. The event records `kesPerUnit`, `valueKes` and
+  `rateSource`, and its rule version is the version that set the rate, so a redemption under v8 is still explained by
+  v8 after the rate changes again.
+- **The payout.** After the commit, the outbox asks the PSP to pay `valueKes` to the holder (a B2C payment). The PSP
+  answers through `POST /v1/payments/payout-callback`, signed like the payment callback, which records `PAYOUT_SENT`
+  (or `PAYOUT_FAILED`). Neither moves units. A resent callback changes nothing.
+- **The receipt.** `GET /v1/redemptions/{id}` gives the redemption with its payout: `PENDING` until the PSP answers,
+  then `PAID` with the M-PESA reference, or `FAILED`. The Operations screen shows it as it happens.
 
 ## Issuance and token definition
 

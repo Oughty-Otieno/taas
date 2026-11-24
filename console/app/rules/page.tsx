@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { call, newKey, num, time, useLive, write } from "@/lib/api";
+import { call, kes, newKey, num, time, useLive, write } from "@/lib/api";
 import { Requires } from "@/components/ui";
 
 // --- Types ---------------------------------------------------------------------------------------
@@ -13,7 +13,7 @@ type Catalogue = { ruleSets: RuleSetView[]; policies: any[]; overlapResolution: 
 type Cond = { mode: "simple"; minKes: number } | { mode: "custom"; expr: string };
 type Award = { mode: "fixed"; units: number } | { mode: "per"; per: number; units: number } | { mode: "custom"; expr: string };
 type RuleForm = { id: string; name: string; priority: number; stopOnMatch: boolean; createdBy?: string; tokenId: string; cond: Cond; award: Award };
-type Draft = { description: string; effective: "now" | "at"; at: string; rules: RuleForm[] };
+type Draft = { description: string; effective: "now" | "at"; at: string; rules: RuleForm[]; rate: string };
 
 // --- Converting between the rule document and the form -------------------------------------------
 
@@ -103,9 +103,14 @@ function RuleStudio() {
   const [busy, setBusy] = useState("");
 
   const draftVersion = ruleSet ? nextVersion(ruleSet.versions) : "v1";
+  // The token these rules award, for its own redemption terms (used when a version sets no rate).
+  const tokenId = inForce?.document.rules?.[0]?.then?.award?.tokenId ?? "LOYALTY_MPR";
+  const { data: token } = useLive<any>(`/v1/tokens/${tokenId}`, false);
+  const termsRate: number | null = token?.token?.redeemValueKes ?? null;
 
   function startFrom(v: Version, change?: (d: Draft) => void) {
-    const d: Draft = { description: v.document.description ?? "", effective: "now", at: "", rules: v.document.rules.map(toForm) };
+    const d: Draft = { description: v.document.description ?? "", effective: "now", at: "", rules: v.document.rules.map(toForm),
+      rate: v.document.redemption?.kesPerUnit != null ? String(v.document.redemption.kesPerUnit) : "" };
     change?.(d);
     setDraft(d);
     setJsonMode(false);
@@ -128,7 +133,9 @@ function RuleStudio() {
     const effectiveFrom = draft.effective === "at" && draft.at
       ? new Date(draft.at).toISOString().replace(/\.\d+Z$/, "Z")
       : new Date(Date.now() - 2000).toISOString().replace(/\.\d+Z$/, "Z");
-    return { ruleSetId: ruleSet?.ruleSetId ?? "loyalty.default", version: draftVersion, effectiveFrom, description: draft.description, rules: draft.rules.map(toRule) };
+    const doc: any = { ruleSetId: ruleSet?.ruleSetId ?? "loyalty.default", version: draftVersion, effectiveFrom, description: draft.description, rules: draft.rules.map(toRule) };
+    if (draft.rate.trim()) doc.redemption = { kesPerUnit: Number(draft.rate) };
+    return doc;
   }
 
   function safeDocument() {
@@ -146,7 +153,8 @@ function RuleStudio() {
     } else {
       try {
         const d = JSON.parse(jsonText);
-        setDraft({ description: d.description ?? "", effective: "at", at: d.effectiveFrom ? d.effectiveFrom.slice(0, 16) : "", rules: (d.rules ?? []).map(toForm) });
+        setDraft({ description: d.description ?? "", effective: "at", at: d.effectiveFrom ? d.effectiveFrom.slice(0, 16) : "", rules: (d.rules ?? []).map(toForm),
+          rate: d.redemption?.kesPerUnit != null ? String(d.redemption.kesPerUnit) : "" });
         setJsonMode(false);
       } catch (e: any) {
         setProblem({ detail: `The JSON does not parse: ${e.message}` });
@@ -233,6 +241,12 @@ function RuleStudio() {
                   </li>
                 ))}
               </ol>
+              <div className="redeem-rate">
+                <b>Redemption rate:</b>{" "}
+                {shown.document.redemption?.kesPerUnit != null
+                  ? <>1 point = <b>{kes(shown.document.redemption.kesPerUnit)}</b>, set by this version</>
+                  : <>not set in this version, so the token&apos;s own terms apply{termsRate != null ? <>: 1 point = <b>{kes(termsRate)}</b></> : null}</>}
+              </div>
               <div className="banner banner-info" style={{ fontSize: 12 }}>
                 <b>How overlapping rules combine:</b> rules are checked in the order above (highest priority first). Every
                 rule that matches adds its award; a matching rule marked &quot;then stop checking&quot; ends the check.
@@ -306,6 +320,10 @@ function RuleStudio() {
                   d.description = "Overlap: the high tier no longer stops, so a KES 60,000 spend matches both tiers";
                   d.rules.forEach((r) => { if (r.priority > 0) r.stopOnMatch = false; });
                 })}>Example: overlapping tiers</button>}
+                {inForce && <button onClick={() => startFrom(inForce, (d) => {
+                  d.description = "Points are worth more: redeem at KES 12 a point";
+                  d.rate = "12";
+                })}>Example: redeem at KES 12</button>}
               </div>
 
               {draft && !jsonMode && (
@@ -319,6 +337,11 @@ function RuleStudio() {
                     <label className="row" style={{ gap: 4 }}><input type="radio" checked={draft.effective === "at"} onChange={() => update((d) => { d.effective = "at"; })} /> from</label>
                     <input type="datetime-local" value={draft.at} disabled={draft.effective !== "at"} onChange={(e) => update((d) => { d.at = e.target.value; })} />
                   </div>
+
+                  <label className="field" style={{ marginBottom: 10 }}>Redemption rate (KES per point)
+                    <input type="number" min={1} step={1} value={draft.rate} onChange={(e) => update((d) => { d.rate = e.target.value; })}
+                      placeholder={termsRate != null ? `blank = the token's terms (KES ${termsRate})` : "blank = the token's terms"} style={{ maxWidth: 260 }} />
+                  </label>
 
                   {draft.rules.map((r, i) => (
                     <RuleEditor key={i} rule={r} index={i}

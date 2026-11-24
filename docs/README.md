@@ -1,6 +1,6 @@
-# TaaS documentation
+# ZenToken documentation
 
-TaaS (Tokenisation as a Service) creates, tracks, transfers and retires digital units of value: loyalty points,
+ZenToken (Tokenisation as a Service) creates, tracks, transfers and retires digital units of value: loyalty points,
 and fractional shares of real-world assets such as apartments, telecom towers and farms. It can always prove
 **who owns what** and **why**.
 

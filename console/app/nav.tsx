@@ -34,8 +34,8 @@ export default function Nav() {
   return (
     <nav className="nav">
       <div className="brand">
-        <span className="brand-mark">T</span>
-        <span>TaaS</span>
+        <span className="brand-mark">Z</span>
+        <span>ZenToken</span>
       </div>
       <div className="nav-links">
         {SCREENS.filter((l) => canSee(session, l)).map((l) => (

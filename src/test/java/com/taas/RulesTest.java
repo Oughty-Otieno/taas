@@ -106,4 +106,48 @@ class RulesTest extends PlatformTestBase {
         assertThat(proposed.at("/awarded/LOYALTY_MPR").asLong()).isEqualTo(101);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM action_event", Long.class)).isEqualTo(before);
     }
+
+    @Test
+    void redeemingPaysOutAtTheRateInForce() throws Exception {
+        loyalty();
+        award("john", 60_000);   // 100 points under v7
+
+        // No version sets a rate yet, so the token's own terms apply: KES 10 a point.
+        JsonNode r = body(write("/v1/redemptions", "{\"tokenId\":\"LOYALTY_MPR\",\"accountId\":\"john\",\"units\":10}")
+                .andExpect(status().isCreated()));
+        assertThat(r.get("kesPerUnit").asLong()).isEqualTo(10);
+        assertThat(r.get("valueKes").asLong()).isEqualTo(100);
+        assertThat(r.get("rateSource").asString()).isEqualTo("token terms");
+        String id = r.get("redemptionId").asString();
+        assertThat(read("/v1/redemptions/" + id).get("payout").get("status").asString()).isEqualTo("PENDING");
+
+        outbox.pollOnce();   // after the commit, the payout is asked of the PSP
+        String paid = json.writeValueAsString(java.util.Map.of("pspEventId", "evt-b2c-1", "redemptionId", id,
+                "status", "SUCCEEDED", "amountKes", 100, "pspReference", "B2C-TEST"));
+        signedPost("/v1/payments/payout-callback", paid).andExpect(status().isOk());
+        signedPost("/v1/payments/payout-callback", paid).andExpect(status().isOk());   // a resend changes nothing
+        JsonNode receipt = read("/v1/redemptions/" + id);
+        assertThat(receipt.get("payout").get("status").asString()).isEqualTo("PAID");
+        assertThat(receipt.get("payout").get("pspReference").asString()).isEqualTo("B2C-TEST");
+        assertThat(count("PAYOUT_SENT")).isEqualTo(1);
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/v1/payments/payout-callback")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(paid))
+                .andExpect(status().isUnauthorized());   // only the PSP, by its signature, may confirm a payout
+
+        // v8 puts the rate in the rules: later redemptions use it and name the version that set it.
+        String v8 = LOYALTY_V7.replace("\"v7\"", "\"v8\"").replace("2020-01-01T00:00:00Z", "2020-06-01T00:00:00Z")
+                .replaceFirst("\"rules\"", "\"redemption\":{\"kesPerUnit\":12},\"rules\"");
+        write("/v1/rules/versions", "{\"document\":" + v8 + "}").andExpect(status().isCreated());
+        JsonNode r2 = body(write("/v1/redemptions", "{\"tokenId\":\"LOYALTY_MPR\",\"accountId\":\"john\",\"units\":5}")
+                .andExpect(status().isCreated()));
+        assertThat(r2.get("valueKes").asLong()).isEqualTo(60);
+        assertThat(r2.get("rateSource").asString()).isEqualTo("loyalty.default@v8");
+        assertThat(read("/v1/redemptions/" + r2.get("redemptionId").asString()).get("ruleVersion").asString())
+                .isEqualTo("loyalty.default@v8");
+        assertThat(read("/v1/tokens/LOYALTY_MPR").get("redemption").get("kesPerUnit").asLong()).isEqualTo(12);
+
+        // A rate must be a positive whole number of shillings.
+        write("/v1/rules/versions", "{\"document\":" + v8.replace("\"v8\"", "\"v9\"").replace("\"kesPerUnit\":12",
+                "\"kesPerUnit\":0") + "}").andExpect(status().isBadRequest());
+    }
 }

@@ -14,6 +14,7 @@ type Summary = {
   capUnits: number | null;
   supply: { authorised: number; issued: number; inTreasury: number; reserved: number; redeemed: number; circulating: number; owners: number };
   value: { unitPriceKes: number | null; valuationKes: number | null; redeemValueKes: number | null; ownedValueKes: number | null; liabilityKes: number | null };
+  redemption?: { kesPerUnit: number; source: string; fromRules: boolean } | null;
   activeRuleSet: string;
   issuer: { businessId: string; name: string; status: string } | null;
 };
@@ -84,7 +85,7 @@ export default function CommandCentre() {
         ))}
       </div>
 
-      {error && <div className="banner banner-bad">Cannot reach the TaaS API: {error}</div>}
+      {error && <div className="banner banner-bad">Cannot reach the ZenToken API: {error}</div>}
 
       <div className={can(session, "ledger:read") ? "grid-main" : ""}>
         <div className="cards">
@@ -126,7 +127,8 @@ function TokenCard({ t }: { t: Summary }) {
       {asset ? (
         <p className="backing">Backing: {token.backing}</p>
       ) : (
-        <p className="backing">Earning: rule set <code>{t.activeRuleSet}</code> · Redemption: {kes(value.redeemValueKes)} per unit</p>
+        <p className="backing">Earning: rule set <code>{t.activeRuleSet}</code> · Redemption: {kes(value.redeemValueKes)} per point
+          {t.redemption && <span className="muted"> ({t.redemption.fromRules ? <>set by <code>{t.redemption.source}</code></> : "token terms"})</span>}</p>
       )}
       <div className="stats">
         <Stat label="Total supply" value={num(supply.authorised)} hint="Authorised supply (ceiling enforced by the database)" />

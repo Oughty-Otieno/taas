@@ -63,4 +63,28 @@ public class PaymentController {
         }
         return Http.send(engine.paymentCallback(callback));
     }
+
+    /** The PSP's answer to a payout (money sent to a holder for a redemption). Same signature scheme as above. */
+    @PostMapping("/payout-callback")
+    public ResponseEntity<Object> payoutCallback(
+            @RequestHeader(value = PaymentSignature.TIMESTAMP_HEADER, required = false) String timestamp,
+            @RequestHeader(value = PaymentSignature.SIGNATURE_HEADER, required = false) String sig,
+            @RequestBody String body) {
+        if (!signature.verify(timestamp, sig, body)) {
+            return ResponseEntity.status(401).body(java.util.Map.of("title", "Unauthorized", "status", 401,
+                    "detail", "Missing, invalid or stale PSP signature"));
+        }
+        Commands.PayoutCallback callback;
+        try {
+            callback = json.readValue(body, Commands.PayoutCallback.class);
+        } catch (JacksonException e) {
+            throw new InvalidRequest("Callback body is not valid JSON for a payout callback");
+        }
+        Set<ConstraintViolation<Commands.PayoutCallback>> violations = validator.validate(callback);
+        if (!violations.isEmpty()) {
+            throw new InvalidRequest(violations.stream().map(v -> v.getPropertyPath() + " " + v.getMessage())
+                    .sorted().reduce((a, b) -> a + "; " + b).orElse("Invalid callback"));
+        }
+        return Http.send(engine.payoutCallback(callback));
+    }
 }

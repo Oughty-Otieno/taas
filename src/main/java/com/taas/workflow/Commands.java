@@ -89,6 +89,16 @@ public final class Commands {
     }
 
     /** The PSP's webhook body. Its authenticity is the signature header, checked before this is read. */
+    /** The PSP's answer to a payout: the redemption's value reached the customer's M-PESA, or did not. */
+    public record PayoutCallback(
+            @NotBlank @Size(max = 100) String pspEventId,
+            @NotNull UUID redemptionId,
+            @NotBlank @Pattern(regexp = "SUCCEEDED|FAILED") String status,
+            @PositiveOrZero long amountKes,
+            @Size(max = 100) String pspReference,
+            @Size(max = 200) String reason) {
+    }
+
     public record PaymentCallback(
             @NotBlank @Size(max = 100) String pspEventId,
             @NotNull UUID orderId,

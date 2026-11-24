@@ -8,7 +8,7 @@ flowchart LR
         CON[Next.js console]
         PAR[Partner apps<br/>POS, M-PESA]
     end
-    subgraph TaaS["TaaS backend: one Spring Boot process"]
+    subgraph ZenToken["ZenToken backend: one Spring Boot process"]
         GW[Gateway<br/>JWT scope check<br/>idempotency]
         ENG[Workflow Engine]
         RE[Rules engine]

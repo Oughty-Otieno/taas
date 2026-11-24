@@ -22,7 +22,7 @@ public class OpenApiConfig {
     @Bean
     OpenAPI taasOpenApi() {
         return new OpenAPI()
-                .info(new Info().title("TaaS: Tokenisation as a Service").version("v1").description("""
+                .info(new Info().title("ZenToken: Tokenisation as a Service").version("v1").description("""
                         One platform for loyalty points and fractional real-world assets.
 
                         **Getting a token (local/demo):** call `POST /v1/dev/token` with body `{}` (all scopes) or
